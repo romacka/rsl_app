@@ -623,7 +623,7 @@ class RSLRecognitionApp(QMainWindow):
                     
                     # Получаем результат распознавания
                     gloss, confidence = self.recognizer.predict(input_tensor)
-
+                    
                     # Обновляем информацию для оверлея на видео
                     if gloss is not None:
                         self.last_recognized_gloss_for_overlay = gloss
@@ -632,6 +632,7 @@ class RSLRecognitionApp(QMainWindow):
                         self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
                         self.last_recognized_confidence_for_overlay = 0.0
                     
+                    # Обрабатываем предсказание для логики сбора предложений
                     if gloss is not None:
                         log_prediction(gloss, confidence, input_shape=input_tensor.shape)
                     
@@ -639,16 +640,13 @@ class RSLRecognitionApp(QMainWindow):
                             if self.is_collecting_sentence:
                                 log_info("Обнаружен сигнал NO_GESTURE ('---'), завершение сбора предложения.")
                                 self._process_collected_sentence() 
-                                # self.is_collecting_sentence и self.current_sentence_predictions 
-                                # будут сброшены внутри _process_collected_sentence
-                                # self.text_display будет обновлен там же
-                                # self.statusBar().showMessage("Ввод предложения завершен. Жду следующего.") # Обновляется в _process
                         else: # Распознан содержательный жест
-                            if confidence < self.recognizer.confidence_threshold: # Проверяем порог уверенности здесь
+                            if confidence < self.recognizer.confidence_threshold: 
                                 log_debug(f"Жест '{gloss}' отброшен из-за низкой уверенности ({confidence:.2f} < {self.recognizer.confidence_threshold})")
                             else:
+                                # Этот блок выполняется, если жест содержательный и уверенность достаточная
                                 if not self.is_collecting_sentence:
-                                    log_info(f"Обнаружен первый содержательный жест '{gloss}', начало сбора предложения.")
+                                    log_info(f"Обнаружен первый содержательный жест '{gloss}' ({confidence:.2f}), начало сбора предложения.")
                                     self.is_collecting_sentence = True
                                     self.current_sentence_predictions = [] 
                                     self.text_display.setText("Идет набор предложения...")
@@ -656,18 +654,19 @@ class RSLRecognitionApp(QMainWindow):
                                     self.save_button.setEnabled(False) 
 
                                 if self.is_collecting_sentence:
-                                    current_step_prediction = [(gloss, confidence)]
+                                    current_step_prediction = [(gloss, confidence)] # Сохраняем как список из одного кортежа для консистентности с будущим топ-N
                                     self.current_sentence_predictions.append(current_step_prediction)
                                     log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
+                                    # Активируем кнопку сохранения, если есть что обрабатывать (хотя бы один жест)
+                                    # Но лучше активировать после _process_collected_sentence
                     
+                    # Очистка буфера кадров (tensors_list) происходит после каждого предсказания window_size
                     self.tensors_list = [] 
                     
                 except Exception as e:
                     self.tensors_list = []  # Очищаем буфер в случае ошибки
                     log_error("Ошибка при обработке кадров для предсказания", e)
-                    # Можно добавить отображение ошибки в statusBar или QMessageBox
-                    self.statusBar().showMessage(f"Ошибка обработки: {e}")
-                    # Если собирали предложение, возможно, стоит его прервать или обработать то, что есть
+                    self.statusBar().showMessage(f"Ошибка обработки предсказания: {e}")
                     if self.is_collecting_sentence:
                         log_warning("Ошибка во время сбора предложения. Попытка обработать собранные данные.")
                         self._process_collected_sentence() # Попытаться обработать то, что есть
@@ -814,37 +813,44 @@ class RSLRecognitionApp(QMainWindow):
                     # Получаем результат распознавания
                     gloss, confidence = self.recognizer.predict(input_tensor)
                     
-                    # Выводим отладочную информацию
+                    # Обновляем информацию для оверлея на видео
+                    if gloss is not None:
+                        self.last_recognized_gloss_for_overlay = gloss
+                        self.last_recognized_confidence_for_overlay = confidence
+                    else: # Если модель ничего не вернула (маловероятно, но для безопасности)
+                        self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
+                        self.last_recognized_confidence_for_overlay = 0.0
+                    
+                    # Обрабатываем предсказание для логики сбора предложений
                     if gloss is not None:
                         log_prediction(gloss, confidence, input_shape=input_tensor.shape)
                     
-                    # Обрабатываем корректно результат распознавания
-                    if gloss is not None and confidence > self.recognizer.confidence_threshold:
-                        if gloss != self.last_recognized_gloss_for_overlay:
-                            self.last_recognized_gloss_for_overlay = gloss
-                            self.last_recognized_confidence_for_overlay = confidence
-                            
-                            # Ограничиваем список предсказаний последними 5 элементами
-                            if len(self.last_recognized_gloss_for_overlay) > 5:
-                                self.last_recognized_gloss_for_overlay = self.last_recognized_gloss_for_overlay[-5:]
-                                self.last_recognized_confidence_for_overlay = self.last_recognized_confidence_for_overlay[-5:]
-                            
-                            # Активируем кнопку сохранения, если есть результаты
-                            if not self.save_button.isEnabled() and len([g for g in self.last_recognized_gloss_for_overlay if g != "---"]) > 0:
-                                self.save_button.setEnabled(True)
-                            
-                            # Обновление отображения результатов
-                            result_text = ""
-                            for i in range(len(self.last_recognized_gloss_for_overlay)):
-                                if self.last_recognized_gloss_for_overlay[i] != "---":
-                                    conf = self.last_recognized_confidence_for_overlay[i] if i < len(self.last_recognized_confidence_for_overlay) else 0.0
-                                    result_text += f"{self.last_recognized_gloss_for_overlay[i]} ({conf:.2f})  "
-                            
-                            self.text_display.setText(result_text)
-                            log_info(f"Обновлен результат: {result_text}")
-                            
-                    # Очистка буфера кадров
-                    self.tensors_list = []
+                        if gloss == self.NO_GESTURE_SIGNAL:
+                            if self.is_collecting_sentence:
+                                log_info("Обнаружен сигнал NO_GESTURE ('---'), завершение сбора предложения.")
+                                self._process_collected_sentence() 
+                        else: # Распознан содержательный жест
+                            if confidence < self.recognizer.confidence_threshold: 
+                                log_debug(f"Жест '{gloss}' отброшен из-за низкой уверенности ({confidence:.2f} < {self.recognizer.confidence_threshold})")
+                            else:
+                                # Этот блок выполняется, если жест содержательный и уверенность достаточная
+                                if not self.is_collecting_sentence:
+                                    log_info(f"Обнаружен первый содержательный жест '{gloss}' ({confidence:.2f}), начало сбора предложения.")
+                                    self.is_collecting_sentence = True
+                                    self.current_sentence_predictions = [] 
+                                    self.text_display.setText("Идет набор предложения...")
+                                    self.statusBar().showMessage("Идет набор предложения...")
+                                    self.save_button.setEnabled(False) 
+
+                                if self.is_collecting_sentence:
+                                    current_step_prediction = [(gloss, confidence)] # Сохраняем как список из одного кортежа для консистентности с будущим топ-N
+                                    self.current_sentence_predictions.append(current_step_prediction)
+                                    log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
+                                    # Активируем кнопку сохранения, если есть что обрабатывать (хотя бы один жест)
+                                    # Но лучше активировать после _process_collected_sentence
+                    
+                    # Очистка буфера кадров (tensors_list) происходит после каждого предсказания window_size
+                    self.tensors_list = [] 
                     
                 except Exception as e:
                     self.tensors_list = []  # Очищаем буфер в случае ошибки

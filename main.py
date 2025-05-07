@@ -55,13 +55,13 @@ class RSLRecognitionApp(QMainWindow):
         self.setWindowTitle("Распознаватель русского жестового языка")
         self.setGeometry(100, 100, 1000, 700)
         
-        # Запись в лог о запуске приложения
         log_info("Приложение запущено")
         
         # Основные компоненты
         self.capture = None
         self.recognizer = None
         self.frame_counter = 0
+        self.tensors_list = [] # Добавил обратно, т.к. используется в update_frame для сбора кадров для модели
         
         # Новые переменные для сбора предложений
         self.NO_GESTURE_SIGNAL = "---"
@@ -97,49 +97,97 @@ class RSLRecognitionApp(QMainWindow):
         
         # Статусная строка
         self.statusBar().showMessage("Готов к работе. Ожидание ввода предложения.")
-        self.text_display.setText("Жду ввода предложения...") # Начальное состояние
+        # self.text_display.setText("Жду ввода предложения...") # Будет установлено в _init_ui или _reset_state
         
     def _init_ui(self):
         # Создание центрального виджета
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         
-        # Создание компоновщика
-        layout = QVBoxLayout(central_widget)
+        # Основной вертикальный компоновщик
+        main_layout = QVBoxLayout(central_widget)
+
+        # --- Панель выбора модели и конфигурации ---
+        settings_layout = QHBoxLayout()
+
+        # Выбор модели
+        model_group_layout = QVBoxLayout()
+        model_label = QLabel("Модель:", self)
+        model_group_layout.addWidget(model_label)
+        self.model_selector = QComboBox(self)
+        if self.available_models:
+            self.model_selector.addItems(self.available_models)
+        else:
+            self.model_selector.addItem("Модели не найдены")
+        model_group_layout.addWidget(self.model_selector)
+        self.model_path_button = QPushButton("Обзор (модель)...", self)
+        self.model_path_button.clicked.connect(self.browse_model)
+        model_group_layout.addWidget(self.model_path_button)
+        settings_layout.addLayout(model_group_layout)
+
+        # Выбор конфигурации
+        config_group_layout = QVBoxLayout()
+        config_label = QLabel("Конфигурация:", self)
+        config_group_layout.addWidget(config_label)
+        self.config_selector = QComboBox(self)
+        if self.available_configs:
+            self.config_selector.addItems(self.available_configs)
+        else:
+            self.config_selector.addItem("Конфигурации не найдены")
+        config_group_layout.addWidget(self.config_selector)
+        self.config_path_button = QPushButton("Обзор (конфиг)...", self)
+        self.config_path_button.clicked.connect(self.browse_config)
+        config_group_layout.addWidget(self.config_path_button)
+        settings_layout.addLayout(config_group_layout)
+        
+        main_layout.addLayout(settings_layout)
         
         # Виджет для отображения видео
         self.video_widget = QLabel(self)
         self.video_widget.setMinimumSize(640, 480)
         self.video_widget.setAlignment(Qt.AlignCenter)
         self.video_widget.setText("Видео не запущено")
-        layout.addWidget(self.video_widget)
+        main_layout.addWidget(self.video_widget)
         
         # Текстовое поле для отображения результатов распознавания
         self.text_display = QTextEdit(self)
         self.text_display.setReadOnly(True)
         self.text_display.setMinimumHeight(100)
-        self.text_display.setText("Ожидаю ввод предложения...")
-        layout.addWidget(self.text_display)
+        self.text_display.setText("Жду ввода предложения...")
+        main_layout.addWidget(self.text_display)
         
         # Кнопки управления
-        button_layout = QHBoxLayout()
+        controls_layout = QHBoxLayout()
         
-        # Кнопка для запуска/остановки камеры
-        self.toggle_cam_button = QPushButton("Запустить камеру", self)
-        # self.toggle_cam_button.clicked.connect(self._toggle_camera) # RECONNECT TO ORIGINAL OR REMOVE IF BUTTON IS PART OF NEW LOGIC
-        # For now, let's assume the button was pre-existing and the connection was to my new method, so I'll comment out the connect.
-        # If this button was entirely part of my new UI, it (and its layout add) should be removed.
-        # Based on the provided main.py, this button seems to be part of the UI I added.
-        # However, given the complexity, I will only disconnect it. User should verify UI.
-        button_layout.addWidget(self.toggle_cam_button)
+        self.start_button = QPushButton("Запустить распознавание", self)
+        self.start_button.clicked.connect(self.start_recognition)
+        controls_layout.addWidget(self.start_button)
         
-        # Кнопка для сброса
+        self.stop_button = QPushButton("Остановить распознавание", self)
+        self.stop_button.clicked.connect(self.stop_recognition)
+        self.stop_button.setEnabled(False)
+        controls_layout.addWidget(self.stop_button)
+
+        self.record_button = QPushButton("Записать видео", self)
+        self.record_button.clicked.connect(self.toggle_recording)
+        self.record_button.setEnabled(False)
+        controls_layout.addWidget(self.record_button)
+        
+        main_layout.addLayout(controls_layout)
+
+        # Дополнительные кнопки (Сохранить, Сбросить)
+        extra_controls_layout = QHBoxLayout()
+        self.save_button = QPushButton("Сохранить результат", self)
+        self.save_button.clicked.connect(self.save_results)
+        self.save_button.setEnabled(False)
+        extra_controls_layout.addWidget(self.save_button)
+        
         self.reset_button = QPushButton("Сбросить", self)
-        self.reset_button.clicked.connect(self._reset_state) 
-        button_layout.addWidget(self.reset_button)
-        
-        layout.addLayout(button_layout)
-        
+        self.reset_button.clicked.connect(self._reset_state)
+        extra_controls_layout.addWidget(self.reset_button)
+
+        main_layout.addLayout(extra_controls_layout)
+
     def _find_available_models(self):
         """Находит доступные модели в директории models"""
         models = []
@@ -238,6 +286,13 @@ class RSLRecognitionApp(QMainWindow):
         if not self.recognizer.session:
             log_error("Ошибка загрузки модели")
             self.statusBar().showMessage("Ошибка загрузки модели")
+            # Восстанавливаем кнопки, чтобы пользователь мог выбрать другую модель/конфиг
+            self._reset_state_before_start() # Сброс переменных
+            self.start_button.setEnabled(True)
+            self.model_selector.setEnabled(True)
+            self.config_selector.setEnabled(True)
+            self.model_path_button.setEnabled(True)
+            self.config_path_button.setEnabled(True)
             return
         
         # Инициализация камеры
@@ -584,22 +639,22 @@ class RSLRecognitionApp(QMainWindow):
                                 # self.text_display будет обновлен там же
                                 # self.statusBar().showMessage("Ввод предложения завершен. Жду следующего.") # Обновляется в _process
                         else: # Распознан содержательный жест
-                            if not self.is_collecting_sentence:
-                                log_info(f"Обнаружен первый жест '{gloss}', начало сбора предложения.")
-                                self.is_collecting_sentence = True
-                                self.current_sentence_predictions = [] # Начинаем новый список для этого предложения
-                                self.text_display.setText("Идет набор предложения...")
-                                self.statusBar().showMessage("Идет набор предложения...")
-                                self.save_button.setEnabled(False) # Деактивируем, пока предложение не будет готово
+                            if confidence < self.recognizer.confidence_threshold: # Проверяем порог уверенности здесь
+                                log_debug(f"Жест '{gloss}' отброшен из-за низкой уверенности ({confidence:.2f} < {self.recognizer.confidence_threshold})")
+                            else:
+                                if not self.is_collecting_sentence:
+                                    log_info(f"Обнаружен первый содержательный жест '{gloss}', начало сбора предложения.")
+                                    self.is_collecting_sentence = True
+                                    self.current_sentence_predictions = [] 
+                                    self.text_display.setText("Идет набор предложения...")
+                                    self.statusBar().showMessage("Идет набор предложения...")
+                                    self.save_button.setEnabled(False) 
 
-                            if self.is_collecting_sentence:
-                                # Сохраняем топ-1 предсказание. В будущем здесь может быть список топ-N.
-                                current_step_prediction = [(gloss, confidence)]
-                                self.current_sentence_predictions.append(current_step_prediction)
-                                log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
-                                # self.text_display обновляется только при начале/окончании сбора, не на каждый жест.
+                                if self.is_collecting_sentence:
+                                    current_step_prediction = [(gloss, confidence)]
+                                    self.current_sentence_predictions.append(current_step_prediction)
+                                    log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
                     
-                    # Очистка буфера кадров (tensors_list) происходит после каждого предсказания window_size
                     self.tensors_list = [] 
                     
                 except Exception as e:

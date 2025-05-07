@@ -322,24 +322,31 @@ class RSLRecognizer:
             
             # Находим индекс максимального значения
             try:
-                max_idx = int(np.argmax(logits))
-                # Проверяем, что индекс не выходит за границы массива
-                if max_idx >= logits.size:
-                    print(f"Ошибка: Индекс {max_idx} выходит за границы массива размера {logits.size}")
-                    return None, 0
+                # Нормализуем значения с помощью softmax для получения вероятностей
+                # Это важно для правильного сравнения уверенности между разными классами
+                exp_logits = np.exp(logits - np.max(logits))
+                probs = exp_logits / np.sum(exp_logits)
                 
-                confidence = float(logits[max_idx])
+                # Получаем топ-5 предсказаний для отладки
+                top_indices = np.argsort(probs)[-5:][::-1]
+                top_classes = []
+                for idx in top_indices:
+                    class_name = self.classes.get(idx, f"Класс {idx}")
+                    top_classes.append((class_name, float(probs[idx])))
                 
-                # Нормализуем значение уверенности с помощью softmax, если значение слишком большое
-                if confidence > 10:  # Вероятно, это логиты, а не вероятности
-                    # Применяем softmax для получения вероятностей
-                    exp_logits = np.exp(logits - np.max(logits))
-                    probs = exp_logits / np.sum(exp_logits)
-                    max_idx = int(np.argmax(probs))
-                    confidence = float(probs[max_idx])
+                if self.debug_mode:
+                    print("Топ-5 предсказаний:")
+                    for i, (class_name, prob) in enumerate(top_classes):
+                        print(f"  {i+1}. {class_name}: {prob:.4f}")
+                
+                # Берем предсказание с максимальной вероятностью
+                max_idx = int(np.argmax(probs))
+                confidence = float(probs[max_idx])
                 
                 # Проверяем порог уверенности
                 if confidence < self.confidence_threshold:
+                    if self.debug_mode:
+                        print(f"Предсказание отклонено из-за низкой уверенности: {confidence:.4f} < {self.confidence_threshold}")
                     return None, confidence
                 
                 # Извлекаем метку из словаря классов
@@ -374,6 +381,7 @@ class RSLRecognizer:
                                 print(f"Сглаживание: заменена метка {label} на {most_common_label}")
                             label = most_common_label
                 
+                # Возвращаем метку и уверенность
                 return label, confidence
                 
             except IndexError as e:

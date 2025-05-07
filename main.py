@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from recognizer import RSLRecognizer
+from debug_log import debug_logger, log_info, log_warning, log_error, log_prediction
 import PyQt5
 # Задаем пути к плагинам Qt перед созданием приложения
 dirname = os.path.dirname(PyQt5.__file__)
@@ -24,11 +25,15 @@ class RSLRecognitionApp(QMainWindow):
         self.setWindowTitle("Распознаватель русского жестового языка")
         self.setGeometry(100, 100, 1000, 700)
         
+        # Запись в лог о запуске приложения
+        log_info("Приложение запущено")
+        
         # Основные компоненты
         self.capture = None
         self.recognizer = None
         self.tensors_list = []
         self.prediction_list = ["---"]
+        self.confidence_list = [0.0]  # Список для хранения уверенностей
         self.frame_counter = 0
         self.models_dir = Path("models")
         self.configs_dir = Path("configs")
@@ -210,10 +215,12 @@ class RSLRecognitionApp(QMainWindow):
         # Получение выбранной модели
         model_name = self.model_selector.currentText()
         if model_name == "Модели не найдены":
+            log_error("Модели не найдены")
             self.statusBar().showMessage("Ошибка: модели не найдены")
             return
         
         model_path = os.path.join(self.models_dir, model_name)
+        log_info(f"Выбрана модель: {model_path}")
         
         # Получение выбранной конфигурации
         config_name = self.config_selector.currentText()
@@ -221,23 +228,30 @@ class RSLRecognitionApp(QMainWindow):
         if config_name != "Конфигурации не найдены":
             config_path = os.path.join(self.configs_dir, config_name)
             config = self.load_config(config_path)
+            log_info(f"Загружена конфигурация: {config_path}")
+            log_info(f"Параметры конфигурации: {config}")
         
         # Инициализация распознавателя
         classes_path = "classes.json"  # Путь к файлу с классами жестов
+        log_info(f"Используем файл классов: {classes_path}")
+        
         self.recognizer = RSLRecognizer(model_path, config, classes_path)
         if not self.recognizer.session:
+            log_error("Ошибка загрузки модели")
             self.statusBar().showMessage("Ошибка загрузки модели")
             return
         
         # Инициализация камеры
         self.capture = cv2.VideoCapture(0)
         if not self.capture.isOpened():
+            log_error("Невозможно открыть камеру")
             self.statusBar().showMessage("Ошибка: невозможно открыть камеру")
             return
         
         # Сброс списков
         self.tensors_list = []
         self.prediction_list = ["---"]
+        self.confidence_list = [0.0]
         self.frame_counter = 0
         
         # Обновление интерфейса
@@ -252,6 +266,7 @@ class RSLRecognitionApp(QMainWindow):
         
         # Запуск таймера для обновления кадров
         self.timer.start(30)  # 30 мс ~ 33 кадра в секунду
+        log_info("Распознавание запущено")
         self.statusBar().showMessage("Распознавание запущено")
     
     def stop_recognition(self):
@@ -276,6 +291,7 @@ class RSLRecognitionApp(QMainWindow):
         self.model_path_button.setEnabled(True)
         self.config_path_button.setEnabled(True)
         
+        log_info("Распознавание остановлено")
         self.statusBar().showMessage("Распознавание остановлено")
     
     def save_results(self):
@@ -371,21 +387,32 @@ class RSLRecognitionApp(QMainWindow):
         
         ret, frame = self.capture.read()
         if not ret:
+            log_warning("Не удалось получить кадр с камеры")
             return
         
         # Добавляем на кадр распознанный жест
         frame_with_text = frame.copy()
         if self.prediction_list and self.prediction_list[-1] != "---":
-            # Добавляем текст с распознанным жестом
+            # Добавляем текст с распознанным жестом и уверенностью
             text = self.prediction_list[-1]
+            confidence = self.confidence_list[-1] if len(self.confidence_list) > 0 else 0.0
+            display_text = f"{text} ({confidence:.2f})"
+            
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 1
             font_thickness = 2
             text_color = (0, 255, 0)  # Зеленый цвет
+            
+            # Меняем цвет в зависимости от уверенности
+            if confidence < 0.3:
+                text_color = (0, 0, 255)  # Красный для низкой уверенности
+            elif confidence < 0.6:
+                text_color = (0, 255, 255)  # Желтый для средней уверенности
+            
             text_position = (20, 50)  # Позиция в левом верхнем углу
             
             # Добавляем фон для текста для лучшей читаемости
-            text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
+            text_size, _ = cv2.getTextSize(display_text, font, font_scale, font_thickness)
             cv2.rectangle(
                 frame_with_text, 
                 (text_position[0] - 10, text_position[1] - text_size[1] - 10),
@@ -396,7 +423,7 @@ class RSLRecognitionApp(QMainWindow):
             
             # Добавляем текст
             cv2.putText(
-                frame_with_text, text, text_position, font, font_scale, 
+                frame_with_text, display_text, text_position, font, font_scale, 
                 text_color, font_thickness, cv2.LINE_AA
             )
         
@@ -429,31 +456,46 @@ class RSLRecognitionApp(QMainWindow):
             if len(self.tensors_list) >= self.recognizer.window_size:
                 try:
                     input_tensor = np.stack(self.tensors_list[:self.recognizer.window_size], axis=1)[None][None]
+                    log_debug(f"Собран входной тензор формы {input_tensor.shape}")
                     
                     # Получаем результат распознавания
                     gloss, confidence = self.recognizer.predict(input_tensor)
                     
+                    # Выводим отладочную информацию
+                    if gloss is not None:
+                        log_prediction(gloss, confidence, input_shape=input_tensor.shape)
+                    
                     # Обрабатываем корректно результат распознавания
-                    if gloss is not None and confidence > 0.2:  # Минимальный порог уверенности
+                    if gloss is not None and confidence > self.recognizer.confidence_threshold:
                         if gloss != self.prediction_list[-1]:
                             self.prediction_list.append(gloss)
+                            self.confidence_list.append(confidence)
+                            
                             # Ограничиваем список предсказаний последними 5 элементами
                             if len(self.prediction_list) > 5:
                                 self.prediction_list = self.prediction_list[-5:]
+                                self.confidence_list = self.confidence_list[-5:]
                             
                             # Активируем кнопку сохранения, если есть результаты
                             if not self.save_button.isEnabled() and len([g for g in self.prediction_list if g != "---"]) > 0:
                                 self.save_button.setEnabled(True)
                             
                             # Обновление отображения результатов
-                            text = "  ".join(self.prediction_list)
-                            self.result_display.setText(text)
+                            result_text = ""
+                            for i in range(len(self.prediction_list)):
+                                if self.prediction_list[i] != "---":
+                                    conf = self.confidence_list[i] if i < len(self.confidence_list) else 0.0
+                                    result_text += f"{self.prediction_list[i]} ({conf:.2f})  "
+                            
+                            self.result_display.setText(result_text)
+                            log_info(f"Обновлен результат: {result_text}")
                             
                     # Очистка буфера кадров
                     self.tensors_list = []
                     
                 except Exception as e:
                     self.tensors_list = []  # Очищаем буфер в случае ошибки
+                    log_error("Ошибка при обработке кадров", e)
                     print(f"Ошибка при обработке кадров: {e}")
 
 

@@ -58,11 +58,11 @@ def log_prediction(gloss, confidence, input_shape=None):
 
 # Функция для вызова API ChatGPT (синхронная версия)
 def get_chatgpt_response(prompt_text):
-    client = openai.OpenAI() # Клиент инициализируется с API ключом из переменной окружения OPENAI_API_KEY
+    client = openai.OpenAI(timeout=30.0) 
     try:
         log_info("Отправка запроса в ChatGPT...")
         completion = client.chat.completions.create(
-            model="gpt-3.5-turbo", # или gpt-4, если у вас есть доступ и желание
+            model="gpt-4.1-nano", 
             messages=[
                 {"role": "system", "content": "Ты — полезный ассистент, который помогает анализировать данные и генерировать текст."},
                 {"role": "user", "content": prompt_text}

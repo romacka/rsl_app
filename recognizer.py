@@ -164,7 +164,7 @@ class RSLRecognizer:
     
     def load_model(self, model_path):
         """
-        Загружает ONNX модель для распознавания жестов
+        Загружает ONNX модель для распознавания жестов с поддержкой GPU
         
         Args:
             model_path (str): Путь к файлу модели
@@ -173,7 +173,22 @@ class RSLRecognizer:
             bool: True, если загрузка успешна, иначе False
         """
         try:
-            self.session = ort.InferenceSession(model_path)
+            # Создаем провайдеры выполнения с приоритетом для GPU
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            
+            # Отображаем доступные провайдеры
+            print(f"Доступные провайдеры ONNX Runtime: {ort.get_available_providers()}")
+            
+            # Создаем сессию с указанными провайдерами
+            self.session = ort.InferenceSession(model_path, providers=providers)
+            
+            # Проверяем, используется ли GPU
+            session_providers = self.session.get_providers()
+            if 'CUDAExecutionProvider' in session_providers:
+                print(f"Модель {os.path.basename(model_path)} загружена на GPU")
+            else:
+                print(f"GPU не доступен, модель {os.path.basename(model_path)} загружена на CPU")
+            
             self.input_name = self.session.get_inputs()[0].name
             self.input_shape = self.session.get_inputs()[0].shape
             self.window_size = self.input_shape[3]
@@ -181,7 +196,7 @@ class RSLRecognizer:
             return True
         except Exception as e:
             print(f"Ошибка загрузки модели: {e}")
-            return False
+            return False 
     
     def predict(self, frames_tensor):
         """

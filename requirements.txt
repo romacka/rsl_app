@@ -1,6 +1,6 @@
 numpy>=1.19.0
 opencv-python>=4.5.0
 PyQt5>=5.15.0
-onnxruntime>=1.8.0
+onnxruntime-gpu>=1.8.0
 PyYAML>=5.4.0
 tqdm>=4.64.0 

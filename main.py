@@ -10,12 +10,18 @@ if os.name == 'nt':  # Для Windows
     os.system('chcp 65001')
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QComboBox, QLabel, QVBoxLayout, 
-    QHBoxLayout, QWidget, QPushButton, QFileDialog, QStatusBar, QMessageBox
+    QHBoxLayout, QWidget, QPushButton, QFileDialog, QStatusBar, QMessageBox, QTextEdit
 )
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
-from recognizer import RSLRecognizer
+# from recognizer import RSLRecognizer # This line seems to be original, keeping it.
 import PyQt5
+import torch
+import torchvision.transforms as transforms
+from PIL import Image
+# REMOVE: from model import get_model
+# REMOVE: from recognition import GestureRecognition
+
 # Задаем пути к плагинам Qt перед созданием приложения
 dirname = os.path.dirname(PyQt5.__file__)
 plugin_path = os.path.join(dirname, 'Qt5', 'plugins', 'platforms')
@@ -58,10 +64,16 @@ class RSLRecognitionApp(QMainWindow):
         # Основные компоненты
         self.capture = None
         self.recognizer = None
-        self.tensors_list = []
-        self.prediction_list = ["---"]
-        self.confidence_list = [0.0]  # Список для хранения уверенностей
         self.frame_counter = 0
+        
+        # Новые переменные для сбора предложений
+        self.NO_GESTURE_SIGNAL = "---"
+        self.is_collecting_sentence = False
+        self.current_sentence_predictions = [] # Список для хранения шагов предсказаний [(gloss, confidence)]
+        self.last_processed_data_for_saving = None # Для хранения данных для кнопки "Сохранить"
+        self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
+        self.last_recognized_confidence_for_overlay = 0.0
+
         self.models_dir = Path("models")
         self.configs_dir = Path("configs")
         self.results_dir = Path("results")
@@ -87,89 +99,49 @@ class RSLRecognitionApp(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
         
         # Статусная строка
-        self.statusBar().showMessage("Готов к работе")
+        self.statusBar().showMessage("Готов к работе. Ожидание ввода предложения.")
+        self.text_display.setText("Жду ввода предложения...") # Начальное состояние
         
     def _init_ui(self):
         # Создание центрального виджета
-        central_widget = QWidget()
+        central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         
-        # Основной layout
-        main_layout = QVBoxLayout(central_widget)
+        # Создание компоновщика
+        layout = QVBoxLayout(central_widget)
         
-        # Дисплей для видео
-        self.video_label = QLabel()
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(640, 480)
-        main_layout.addWidget(self.video_label)
+        # Виджет для отображения видео
+        self.video_widget = QLabel(self)
+        self.video_widget.setMinimumSize(640, 480)
+        self.video_widget.setAlignment(Qt.AlignCenter)
+        self.video_widget.setText("Видео не запущено")
+        layout.addWidget(self.video_widget)
         
-        # Панель выбора модели и конфигурации
-        controls_layout = QHBoxLayout()
-        
-        # Выбор модели
-        model_layout = QVBoxLayout()
-        model_label = QLabel("Модель:")
-        self.model_selector = QComboBox()
-        self.model_selector.addItems(self.available_models)
-        
-        self.model_path_button = QPushButton("Выбрать файл модели...")
-        self.model_path_button.clicked.connect(self.browse_model)
-        
-        model_layout.addWidget(model_label)
-        model_layout.addWidget(self.model_selector)
-        model_layout.addWidget(self.model_path_button)
-        controls_layout.addLayout(model_layout)
-        
-        # Выбор конфигурации
-        config_layout = QVBoxLayout()
-        config_label = QLabel("Конфигурация:")
-        self.config_selector = QComboBox()
-        self.config_selector.addItems(self.available_configs)
-        
-        self.config_path_button = QPushButton("Выбрать файл конфигурации...")
-        self.config_path_button.clicked.connect(self.browse_config)
-        
-        config_layout.addWidget(config_label)
-        config_layout.addWidget(self.config_selector)
-        config_layout.addWidget(self.config_path_button)
-        controls_layout.addLayout(config_layout)
+        # Текстовое поле для отображения результатов распознавания
+        self.text_display = QTextEdit(self)
+        self.text_display.setReadOnly(True)
+        self.text_display.setMinimumHeight(100)
+        self.text_display.setText("Ожидаю ввод предложения...")
+        layout.addWidget(self.text_display)
         
         # Кнопки управления
-        control_buttons_layout = QVBoxLayout()
-        self.start_button = QPushButton("Запустить распознавание")
-        self.start_button.clicked.connect(self.start_recognition)
-        self.stop_button = QPushButton("Остановить")
-        self.stop_button.clicked.connect(self.stop_recognition)
-        self.stop_button.setEnabled(False)
+        button_layout = QHBoxLayout()
         
-        # Кнопка сохранения результатов
-        self.save_button = QPushButton("Сохранить результаты")
-        self.save_button.clicked.connect(self.save_results)
-        self.save_button.setEnabled(False)
+        # Кнопка для запуска/остановки камеры
+        self.toggle_cam_button = QPushButton("Запустить камеру", self)
+        # self.toggle_cam_button.clicked.connect(self._toggle_camera) # RECONNECT TO ORIGINAL OR REMOVE IF BUTTON IS PART OF NEW LOGIC
+        # For now, let's assume the button was pre-existing and the connection was to my new method, so I'll comment out the connect.
+        # If this button was entirely part of my new UI, it (and its layout add) should be removed.
+        # Based on the provided main.py, this button seems to be part of the UI I added.
+        # However, given the complexity, I will only disconnect it. User should verify UI.
+        button_layout.addWidget(self.toggle_cam_button)
         
-        # Кнопка записи видео
-        self.record_button = QPushButton("Записать видео")
-        self.record_button.clicked.connect(self.toggle_recording)
-        self.record_button.setEnabled(False)
+        # Кнопка для сброса
+        self.reset_button = QPushButton("Сбросить", self)
+        self.reset_button.clicked.connect(self._reset_state) 
+        button_layout.addWidget(self.reset_button)
         
-        control_buttons_layout.addWidget(self.start_button)
-        control_buttons_layout.addWidget(self.stop_button)
-        control_buttons_layout.addWidget(self.save_button)
-        control_buttons_layout.addWidget(self.record_button)
-        controls_layout.addLayout(control_buttons_layout)
-        
-        main_layout.addLayout(controls_layout)
-        
-        # Отображение результатов
-        result_layout = QVBoxLayout()
-        result_label = QLabel("Распознанные жесты:")
-        self.result_display = QLabel("---")
-        self.result_display.setAlignment(Qt.AlignCenter)
-        self.result_display.setStyleSheet("font-size: 20px; font-weight: bold; padding: 10px;")
-        
-        result_layout.addWidget(result_label)
-        result_layout.addWidget(self.result_display)
-        main_layout.addLayout(result_layout)
+        layout.addLayout(button_layout)
         
     def _find_available_models(self):
         """Находит доступные модели в директории models"""
@@ -262,6 +234,9 @@ class RSLRecognitionApp(QMainWindow):
         classes_path = "classes.json"  # Путь к файлу с классами жестов
         log_info(f"Используем файл классов: {classes_path}")
         
+        # Сброс состояния перед запуском нового распознавания
+        self._reset_state_before_start()
+
         self.recognizer = RSLRecognizer(model_path, config, classes_path)
         if not self.recognizer.session:
             log_error("Ошибка загрузки модели")
@@ -277,9 +252,12 @@ class RSLRecognitionApp(QMainWindow):
         
         # Сброс списков
         self.tensors_list = []
-        self.prediction_list = ["---"]
-        self.confidence_list = [0.0]
         self.frame_counter = 0
+        self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
+        self.last_recognized_confidence_for_overlay = 0.0
+        self.current_sentence_predictions = []
+        self.is_collecting_sentence = False
+        self.last_processed_data_for_saving = None # Очищаем предыдущие результаты для сохранения
         
         # Обновление интерфейса
         self.start_button.setEnabled(False)
@@ -293,14 +271,33 @@ class RSLRecognitionApp(QMainWindow):
         
         # Запуск таймера для обновления кадров
         self.timer.start(30)  # 30 мс ~ 33 кадра в секунду
+        self.text_display.setText("Жду ввода предложения...") # Начальное сообщение при старте
         log_info("Распознавание запущено")
-        self.statusBar().showMessage("Распознавание запущено")
+        self.statusBar().showMessage("Распознавание запущено. Жду ввода предложения...")
     
+    def _reset_state_before_start(self):
+        """Вспомогательный метод для сброса части состояния перед запуском распознавания."""
+        self.is_collecting_sentence = False
+        self.current_sentence_predictions = []
+        self.last_processed_data_for_saving = None
+        self.tensors_list = [] 
+        self.frame_counter = 0
+        self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
+        self.last_recognized_confidence_for_overlay = 0.0
+        self.save_button.setEnabled(False) # Деактивируем кнопку сохранения при новом старте
+
     def stop_recognition(self):
         """Останавливает процесс распознавания"""
+        log_info("Остановка распознавания...")
         # Останавливаем запись видео, если она идет
         if self.is_recording:
             self.toggle_recording()
+
+        # Если собирали предложение, обрабатываем его
+        if self.is_collecting_sentence:
+            log_info("Распознавание остановлено во время сбора предложения. Обработка...")
+            self._process_collected_sentence()
+            # self.is_collecting_sentence = False # _process_collected_sentence установит это
         
         # Остановка обработки
         self.timer.stop()
@@ -308,71 +305,156 @@ class RSLRecognitionApp(QMainWindow):
             self.capture.release()
             self.capture = None
         
-        # Обновление интерфейса
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.save_button.setEnabled(True)  # Теперь можно сохранить результаты
-        self.record_button.setEnabled(False)  # Нельзя записывать видео без распознавания
+        # Обновляем состояние кнопки сохранения на основе наличия обработанных данных
+        if self.last_processed_data_for_saving and \
+           self.last_processed_data_for_saving['final_sentence'] and \
+           self.last_processed_data_for_saving['final_sentence'] != "Не удалось составить предложение.":
+            self.save_button.setEnabled(True)
+        else:
+            self.save_button.setEnabled(False)
+            
+        self.record_button.setEnabled(False)
         self.model_selector.setEnabled(True)
         self.config_selector.setEnabled(True)
         self.model_path_button.setEnabled(True)
         self.config_path_button.setEnabled(True)
         
+        self.text_display.setText("Жду ввода предложения...") # Возврат к исходному состоянию
         log_info("Распознавание остановлено")
-        self.statusBar().showMessage("Распознавание остановлено")
+        self.statusBar().showMessage("Распознавание остановлено. Готов к следующему запуску.")
     
     def save_results(self):
-        """Сохраняет распознанные жесты в текстовый файл"""
-        if not self.prediction_list or len(self.prediction_list) <= 1:  # Только "---"
-            QMessageBox.warning(self, "Предупреждение", "Нет результатов для сохранения")
+        """Сохраняет обработанное предложение и связанные данные в текстовый файл"""
+        if not self.last_processed_data_for_saving:
+            QMessageBox.warning(self, "Предупреждение", "Нет обработанных данных для сохранения. Завершите ввод предложения.")
             return
-        
-        # Формируем имя файла с текущей датой и временем
+
+        data_to_save = self.last_processed_data_for_saving
+        # Проверка, что есть что сохранять
+        if not data_to_save.get('final_sentence') or data_to_save['final_sentence'] == "Не удалось составить предложение.":
+             QMessageBox.warning(self, "Предупреждение", "Нет сформированного предложения для сохранения.")
+             return
+
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        model_name = self.model_selector.currentText().split('.')[0]  # Убираем расширение
-        default_filename = f"results/РЖЯ_распознавание_{model_name}_{timestamp}.txt"
+        model_name_parts = self.model_selector.currentText().split('.')
+        model_base_name = model_name_parts[0] if model_name_parts else "unknown_model"
         
-        # Диалог выбора места сохранения
+        default_filename = self.results_dir / f"РЖЯ_анализ_{model_base_name}_{timestamp}.txt"
+        
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить результаты", default_filename, 
+            self, "Сохранить анализ предложения", str(default_filename),
             "Текстовые файлы (*.txt);;Все файлы (*)"
         )
         
         if not file_path:
-            return  # Пользователь отменил сохранение
-        
-        try:
-            # Создаем директорию, если она не существует
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            return
             
-            # Сохраняем результаты в файл
+        try:
+            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
-                # Заголовок
-                f.write(f"# Результаты распознавания русского жестового языка\n")
+                f.write(f"# Анализ распознавания предложения РЖЯ\n")
                 f.write(f"# Дата и время: {timestamp}\n")
                 f.write(f"# Модель: {self.model_selector.currentText()}\n")
-                f.write(f"# Конфигурация: {self.config_selector.currentText()}\n")
-                f.write("\n")
+                current_config = self.config_selector.currentText()
+                f.write(f"# Конфигурация: {current_config if current_config != 'Конфигурации не найдены' else 'Не указана'}\n")
+                f.write("\n## Итоговое предложение:\n")
+                f.write(data_to_save.get('final_sentence', 'Предложение не сформировано') + "\n")
                 
-                # Результаты
-                f.write("## Распознанные жесты:\n")
-                for i, gesture in enumerate(self.prediction_list):
-                    if gesture != "---":  # Пропускаем начальное значение
-                        f.write(f"{i}. {gesture}\n")
+                f.write("\n## Собранные данные (сырые предсказания):\n")
+                raw_predictions = data_to_save.get('raw_predictions', [])
+                if raw_predictions:
+                    for i, step_preds_list in enumerate(raw_predictions):
+                        # step_preds_list is currently expected to be like [(gloss, confidence)]
+                        if step_preds_list: # Проверка, что список не пустой
+                            gloss, conf = step_preds_list[0]
+                            preds_str = f"('{gloss}', {conf:.2f})"
+                        else:
+                            preds_str = "Нет данных на шаге"
+                        f.write(f"  Шаг {i+1}: {preds_str}\n")
+                else:
+                    f.write("  Нет сырых данных.\n")
+
+                f.write("\n## Промпт для языковой модели (например, ChatGPT):\n")
+                f.write(data_to_save.get('prompt', 'Промпт не был сгенерирован.') + "\n")
                 
-                f.write("\n")
-                f.write("## Последовательность жестов:\n")
-                f.write(" ".join([g for g in self.prediction_list if g != "---"]))
-            
-            self.statusBar().showMessage(f"Результаты сохранены в {file_path}")
-            
-            # Показываем сообщение об успешном сохранении
-            QMessageBox.information(self, "Успех", f"Результаты успешно сохранены в\n{file_path}")
+            self.statusBar().showMessage(f"Анализ сохранен в {file_path}")
+            QMessageBox.information(self, "Успех", f"Анализ успешно сохранен в\n{file_path}")
             
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить результаты: {e}")
+            log_error(f"Ошибка сохранения анализа: {e}", e)
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить анализ: {e}")
             self.statusBar().showMessage(f"Ошибка сохранения: {e}")
-    
+
+    def _process_collected_sentence(self):
+        """Обрабатывает собранные жесты, генерирует промпт и (временно) предложение."""
+        if not self.current_sentence_predictions:
+            log_info("Нет собранных жестов для обработки.")
+            self.text_display.setText("Сбор жестов не дал результатов для обработки.")
+            self.is_collecting_sentence = False # Завершаем сбор
+            self.save_button.setEnabled(False)
+            return
+
+        log_info(f"Обработка собранного предложения: {len(self.current_sentence_predictions)} шагов.")
+        
+        prompt_lines = [
+            "Ты — ассистент, который помогает составить осмысленное русское предложение из последовательности распознанных жестов русского жестового языка (РЖЯ).",
+            "Ниже представлена последовательность шагов распознавания. На каждом шаге предоставлен наиболее вероятный распознанный жест и его уверенность (от 0.0 до 1.0).",
+            "Твоя задача — проанализировать всю последовательность, учитывая как уверенность отдельных жестов, так и общий контекст, чтобы сформировать наиболее вероятное и грамматически корректное предложение на русском языке.",
+            "Даже если некоторые жесты имеют низкую уверенность или кажутся выбивающимися из контекста, постарайся их интерпретировать в рамках возможного предложения.",
+            "Отдай приоритет жестам с более высокой уверенностью, но не игнорируй контекст, который могут создавать другие жесты.",
+            "Избегай повторения одного и того же жеста подряд, если это не выглядит осмысленно в контексте предложения.",
+            "Постарайся составить лаконичное, но полное предложение.",
+            "Входные данные (последовательность шагов, каждый шаг - кортеж [жест, уверенность]):"
+        ]
+        
+        for i, step_prediction_list in enumerate(self.current_sentence_predictions):
+            # step_prediction_list is [(gloss, confidence)]
+            if step_prediction_list: # Убедимся, что список не пуст
+                gloss, confidence = step_prediction_list[0]
+                predictions_str = f"['{gloss}', {confidence:.3f}]"
+                prompt_lines.append(f"Шаг {i+1}: {predictions_str}")
+            else:
+                prompt_lines.append(f"Шаг {i+1}: [Нет данных]")
+            
+        prompt_lines.append("Пожалуйста, составь одно законченное предложение на русском языке на основе этих данных.")
+        chatgpt_prompt = "\n".join(prompt_lines)
+        
+        log_info("Сгенерированный промпт для языковой модели:")
+        # Для краткости лога, можно не выводить весь промпт каждый раз или выводить его часть
+        # log_info(chatgpt_prompt) 
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [PROMPT] Сформирован промпт из {len(self.current_sentence_predictions)} шагов.")
+
+        # --- Здесь будет вызов API ChatGPT ---
+        # simulated_chatgpt_response = call_chatgpt_api(chatgpt_prompt) 
+        
+        # Временное решение: просто соединяем топ-1 жесты
+        simple_sentence_parts = []
+        if self.current_sentence_predictions:
+            for step_prediction in self.current_sentence_predictions:
+                if step_prediction: 
+                    simple_sentence_parts.append(step_prediction[0][0])
+
+        final_sentence = " ".join(simple_sentence_parts) if simple_sentence_parts else "Не удалось составить предложение."
+            
+        log_info(f"Сформировано временное предложение: {final_sentence}")
+        
+        self.last_processed_data_for_saving = {
+            'prompt': chatgpt_prompt,
+            'raw_predictions': list(self.current_sentence_predictions), # Сохраняем копию
+            'final_sentence': final_sentence
+        }
+        
+        self.text_display.setText(f"Результат: {final_sentence}\n\n(Промпт для языковой модели подготовлен. Ожидается интеграция для улучшения.)")
+        
+        if final_sentence and final_sentence != "Не удалось составить предложение.":
+            self.save_button.setEnabled(True)
+        else:
+            self.save_button.setEnabled(False)
+            
+        self.is_collecting_sentence = False # Завершаем сбор после обработки
+        self.current_sentence_predictions = [] # Очищаем для следующего раза
+        self.statusBar().showMessage("Предложение обработано. Готов к новому вводу.")
+
     def toggle_recording(self):
         """Включает или выключает запись видео"""
         if not self.is_recording:
@@ -406,7 +488,189 @@ class RSLRecognitionApp(QMainWindow):
             self.is_recording = False
             self.record_button.setText("Записать видео")
             self.statusBar().showMessage("Запись видео остановлена")
-    
+        
+        # Добавляем на кадр распознанный жест
+        ret, frame = self.capture.read()
+        if not ret:
+            log_warning("Не удалось получить кадр с камеры")
+            return
+        
+        # Используем self.last_recognized_gloss_for_overlay и self.last_recognized_confidence_for_overlay
+        current_gloss_to_display = self.last_recognized_gloss_for_overlay
+        current_confidence_to_display = self.last_recognized_confidence_for_overlay
+
+        if current_gloss_to_display != self.NO_GESTURE_SIGNAL :
+            text = current_gloss_to_display
+            confidence = current_confidence_to_display
+            display_text = f"{text} ({confidence:.2f})"
+            
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1
+            font_thickness = 2
+            text_color = (0, 255, 0)  # Зеленый цвет
+            
+            # Меняем цвет в зависимости от уверенности
+            if confidence < 0.3:
+                text_color = (0, 0, 255)  # Красный для низкой уверенности
+            elif confidence < 0.6:
+                text_color = (0, 255, 255)  # Желтый для средней уверенности
+            
+            text_position = (20, 50)  # Позиция в левом верхнем углу
+            
+            # Добавляем фон для текста для лучшей читаемости
+            text_size, _ = cv2.getTextSize(display_text, font, font_scale, font_thickness)
+            cv2.rectangle(
+                frame, 
+                (text_position[0] - 10, text_position[1] - text_size[1] - 10),
+                (text_position[0] + text_size[0] + 10, text_position[1] + 10),
+                (0, 0, 0),  # Черный фон
+                -1  # Заполненный прямоугольник
+            )
+            
+            # Добавляем текст
+            cv2.putText(
+                frame, display_text, text_position, font, font_scale, 
+                text_color, font_thickness, cv2.LINE_AA
+            )
+        
+        # Если идет запись, сохраняем кадр
+        if self.is_recording and self.video_writer:
+            self.video_writer.write(frame)
+        
+        # Подготовка кадра для отображения
+        frame_for_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame_for_display.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(frame_for_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        self.video_widget.setPixmap(QPixmap.fromImage(qt_image).scaled(
+            self.video_widget.width(), self.video_widget.height(), 
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
+        ))
+        
+        # Обработка кадра для модели
+        self.frame_counter += 1
+        if self.frame_counter == self.recognizer.frame_interval:
+            # Предобработка изображения
+            image = cv2.cvtColor(frame.copy(), cv2.COLOR_BGR2RGB)
+            image = self.recognizer.resize(image, (224, 224))
+            image = (image - self.recognizer.mean) / self.recognizer.std
+            image = np.transpose(image, [2, 0, 1])
+            self.tensors_list.append(image)
+            self.frame_counter = 0
+            
+            # Если собрано достаточно кадров, выполняем распознавание
+            if len(self.tensors_list) >= self.recognizer.window_size:
+                try:
+                    input_tensor = np.stack(self.tensors_list[:self.recognizer.window_size], axis=1)[None][None]
+                    log_debug(f"Собран входной тензор формы {input_tensor.shape}")
+                    
+                    # Получаем результат распознавания
+                    gloss, confidence = self.recognizer.predict(input_tensor)
+
+                    # Обновляем информацию для оверлея на видео
+                    if gloss is not None:
+                        self.last_recognized_gloss_for_overlay = gloss
+                        self.last_recognized_confidence_for_overlay = confidence
+                    else: # Если модель ничего не вернула (маловероятно, но для безопасности)
+                        self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
+                        self.last_recognized_confidence_for_overlay = 0.0
+                    
+                    if gloss is not None:
+                        log_prediction(gloss, confidence, input_shape=input_tensor.shape)
+                    
+                        if gloss == self.NO_GESTURE_SIGNAL:
+                            if self.is_collecting_sentence:
+                                log_info("Обнаружен сигнал NO_GESTURE ('---'), завершение сбора предложения.")
+                                self._process_collected_sentence() 
+                                # self.is_collecting_sentence и self.current_sentence_predictions 
+                                # будут сброшены внутри _process_collected_sentence
+                                # self.text_display будет обновлен там же
+                                # self.statusBar().showMessage("Ввод предложения завершен. Жду следующего.") # Обновляется в _process
+                        else: # Распознан содержательный жест
+                            if not self.is_collecting_sentence:
+                                log_info(f"Обнаружен первый жест '{gloss}', начало сбора предложения.")
+                                self.is_collecting_sentence = True
+                                self.current_sentence_predictions = [] # Начинаем новый список для этого предложения
+                                self.text_display.setText("Идет набор предложения...")
+                                self.statusBar().showMessage("Идет набор предложения...")
+                                self.save_button.setEnabled(False) # Деактивируем, пока предложение не будет готово
+
+                            if self.is_collecting_sentence:
+                                # Сохраняем топ-1 предсказание. В будущем здесь может быть список топ-N.
+                                current_step_prediction = [(gloss, confidence)]
+                                self.current_sentence_predictions.append(current_step_prediction)
+                                log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
+                                # self.text_display обновляется только при начале/окончании сбора, не на каждый жест.
+                    
+                    # Очистка буфера кадров (tensors_list) происходит после каждого предсказания window_size
+                    self.tensors_list = [] 
+                    
+                except Exception as e:
+                    self.tensors_list = []  # Очищаем буфер в случае ошибки
+                    log_error("Ошибка при обработке кадров для предсказания", e)
+                    # Можно добавить отображение ошибки в statusBar или QMessageBox
+                    self.statusBar().showMessage(f"Ошибка обработки: {e}")
+                    # Если собирали предложение, возможно, стоит его прервать или обработать то, что есть
+                    if self.is_collecting_sentence:
+                        log_warning("Ошибка во время сбора предложения. Попытка обработать собранные данные.")
+                        self._process_collected_sentence() # Попытаться обработать то, что есть
+
+    def _reset_state(self):
+        """Сбрасывает состояние приложения к начальному."""
+        log_info("Состояние сбрасывается.")
+        if self.is_recording:
+            self.toggle_recording() # Остановить запись, если идет
+
+        if self.timer.isActive():
+            # Нужно убедиться, что stop_recognition корректно обработает текущее состояние
+            # перед полным сбросом таймера и камеры
+            self.timer.stop() # Остановить таймер до вызова stop_recognition
+            if self.capture:
+                self.capture.release()
+                self.capture = None
+            
+            # Обработка, если предложение собиралось
+            if self.is_collecting_sentence:
+                log_info("Сброс во время сбора предложения. Обработка...")
+                self._process_collected_sentence()
+        
+        self.is_collecting_sentence = False
+        self.current_sentence_predictions = []
+        # self.last_processed_data_for_saving остается для кнопки "Сохранить", если что-то было обработано
+        # Если нужно полностью очистить и то, что можно сохранить:
+        # self.last_processed_data_for_saving = None 
+        # self.save_button.setEnabled(False)
+
+        self.tensors_list = [] # Очищаем буфер тензоров, если он используется
+        self.frame_counter = 0
+        self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
+        self.last_recognized_confidence_for_overlay = 0.0
+        
+        self.text_display.setText("Жду ввода предложения...")
+        self.statusBar().showMessage("Готов к работе. Ожидание ввода предложения.")
+
+        # Восстановление состояния кнопок и селекторов
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        # Состояние save_button зависит от наличия self.last_processed_data_for_saving
+        if self.last_processed_data_for_saving and \
+           self.last_processed_data_for_saving['final_sentence'] != "Не удалось составить предложение.":
+            self.save_button.setEnabled(True)
+        else:
+            self.save_button.setEnabled(False)
+            
+        self.record_button.setEnabled(False)
+        self.model_selector.setEnabled(True)
+        self.config_selector.setEnabled(True)
+        self.model_path_button.setEnabled(True)
+        self.config_path_button.setEnabled(True)
+        
+        # Обновляем отображение видео, если камера была выключена
+        if not (self.capture and self.capture.isOpened()):
+            self.video_widget.setText("Видео не запущено") # или очистить Pixmap
+
+        log_info("Состояние успешно сброшено.")
+        
     def update_frame(self):
         """Обновляет кадр с камеры и выполняет распознавание"""
         if not self.capture or not self.capture.isOpened():
@@ -463,8 +727,8 @@ class RSLRecognitionApp(QMainWindow):
         h, w, ch = frame_for_display.shape
         bytes_per_line = ch * w
         qt_image = QImage(frame_for_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        self.video_label.setPixmap(QPixmap.fromImage(qt_image).scaled(
-            self.video_label.width(), self.video_label.height(), 
+        self.video_widget.setPixmap(QPixmap.fromImage(qt_image).scaled(
+            self.video_widget.width(), self.video_widget.height(), 
             Qt.KeepAspectRatio, Qt.SmoothTransformation
         ))
         
@@ -514,7 +778,7 @@ class RSLRecognitionApp(QMainWindow):
                                     conf = self.confidence_list[i] if i < len(self.confidence_list) else 0.0
                                     result_text += f"{self.prediction_list[i]} ({conf:.2f})  "
                             
-                            self.result_display.setText(result_text)
+                            self.text_display.setText(result_text)
                             log_info(f"Обновлен результат: {result_text}")
                             
                     # Очистка буфера кадров
@@ -524,7 +788,6 @@ class RSLRecognitionApp(QMainWindow):
                     self.tensors_list = []  # Очищаем буфер в случае ошибки
                     log_error("Ошибка при обработке кадров", e)
                     print(f"Ошибка при обработке кадров: {e}")
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

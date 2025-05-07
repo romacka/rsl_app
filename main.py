@@ -5,6 +5,9 @@ import numpy as np
 import yaml
 import datetime
 from pathlib import Path
+from recognizer import RSLRecognizer
+from dotenv import load_dotenv
+import openai
 # Настройка для правильного отображения русских символов в консоли
 if os.name == 'nt':  # Для Windows
     os.system('chcp 65001')
@@ -19,6 +22,9 @@ import PyQt5
 # REMOVE: from model import get_model
 # REMOVE: from recognition import GestureRecognition
 from recognizer import RSLRecognizer 
+
+# Загрузка переменных окружения из .env файла
+load_dotenv()
 
 # Задаем пути к плагинам Qt перед созданием приложения
 dirname = os.path.dirname(PyQt5.__file__)
@@ -49,6 +55,27 @@ def log_prediction(gloss, confidence, input_shape=None):
     if input_shape:
         message += f", Форма входных данных: {input_shape}"
     print(f"[{timestamp}] [PREDICTION] {message}")
+
+# Функция для вызова API ChatGPT (синхронная версия)
+def get_chatgpt_response(prompt_text):
+    client = openai.OpenAI() # Клиент инициализируется с API ключом из переменной окружения OPENAI_API_KEY
+    try:
+        log_info("Отправка запроса в ChatGPT...")
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo", # или gpt-4, если у вас есть доступ и желание
+            messages=[
+                {"role": "system", "content": "Ты — полезный ассистент, который помогает анализировать данные и генерировать текст."},
+                {"role": "user", "content": prompt_text}
+            ],
+            temperature=0.5, # Можно настроить для большей или меньшей креативности
+            max_tokens=150 # Ограничение на длину ответа
+        )
+        response_text = completion.choices[0].message.content.strip()
+        log_info(f"Ответ от ChatGPT получен: {response_text}")
+        return response_text
+    except Exception as e:
+        log_error(f"Ошибка при вызове API ChatGPT: {e}", e)
+        return "Ошибка при обращении к ChatGPT: " + str(e)
 
 class RSLRecognitionApp(QMainWindow):
     def __init__(self):
@@ -451,23 +478,27 @@ class RSLRecognitionApp(QMainWindow):
         
         prompt_lines = [
             "Ты — ассистент, который помогает составить осмысленное русское предложение из последовательности распознанных жестов русского жестового языка (РЖЯ).",
-            "Ниже представлена последовательность шагов распознавания. На каждом шаге предоставлен наиболее вероятный распознанный жест и его уверенность (от 0.0 до 1.0).",
-            "Твоя задача — проанализировать всю последовательность, учитывая как уверенность отдельных жестов, так и общий контекст, чтобы сформировать наиболее вероятное и грамматически корректное предложение на русском языке.",
-            "Даже если некоторые жесты имеют низкую уверенность или кажутся выбивающимися из контекста, постарайся их интерпретировать в рамках возможного предложения.",
+            f"На каждом из {len(self.current_sentence_predictions)} шагов распознавания тебе будет предоставлен список из нескольких (до {self.recognizer.num_top_predictions}) наиболее вероятных жестов и их вероятностей.",
+            "Твоя задача — проанализировать всю последовательность, учитывая как уверенность отдельных жестов на каждом шаге, так и общий контекст, чтобы сформировать наиболее вероятное и грамматически корректное предложение на русском языке.",
+            "Выбирай наиболее подходящие жесты из предложенных на каждом шаге, чтобы составить связное предложение.",
+            "Даже если некоторые жесты на каком-то шаге имеют низкую уверенность или кажутся выбивающимися из контекста, постарайся их интерпретировать в рамках возможного предложения, возможно, выбрав другой вариант с этого же шага или учитывая жесты с предыдущих/последующих шагов.",
             "Отдай приоритет жестам с более высокой уверенностью, но не игнорируй контекст, который могут создавать другие жесты.",
             "Избегай повторения одного и того же жеста подряд, если это не выглядит осмысленно в контексте предложения.",
             "Постарайся составить лаконичное, но полное предложение.",
-            "Входные данные (последовательность шагов, каждый шаг - кортеж [жест, уверенность]):"
+            f"Входные данные (последовательность шагов, каждый шаг - список из до {self.recognizer.num_top_predictions} кортежей [жест, вероятность]):"
         ]
         
-        for i, step_prediction_list in enumerate(self.current_sentence_predictions):
-            # step_prediction_list is [(gloss, confidence)]
-            if step_prediction_list: # Убедимся, что список не пуст
-                gloss, confidence = step_prediction_list[0]
-                predictions_str = f"['{gloss}', {confidence:.3f}]"
-                prompt_lines.append(f"Шаг {i+1}: {predictions_str}")
+        # current_sentence_predictions теперь это список списков: [ [('ж1',в1), ('ж2',в2)], [('ж1',в1),('ж2',в2)] ]
+        for i, step_top_n_predictions in enumerate(self.current_sentence_predictions):
+            # step_top_n_predictions это, например, [('жест1', 0.7), ('жест2', 0.15), ('жест3', 0.05)]
+            predictions_str_list = []
+            if step_top_n_predictions: # Убедимся, что список не пуст
+                for gloss, confidence in step_top_n_predictions:
+                    predictions_str_list.append(f"('{gloss}', {confidence:.3f})")
+                step_details = f"[{', '.join(predictions_str_list)}]"
             else:
-                prompt_lines.append(f"Шаг {i+1}: [Нет данных]")
+                step_details = "[Нет данных на шаге]"
+            prompt_lines.append(f"Шаг {i+1}: {step_details}")
             
         prompt_lines.append("Пожалуйста, составь одно законченное предложение на русском языке на основе этих данных.")
         chatgpt_prompt = "\n".join(prompt_lines)
@@ -477,32 +508,21 @@ class RSLRecognitionApp(QMainWindow):
         # log_info(chatgpt_prompt) 
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [PROMPT] Сформирован промпт из {len(self.current_sentence_predictions)} шагов.")
 
-        # --- Здесь будет вызов API ChatGPT ---
-        # simulated_chatgpt_response = call_chatgpt_api(chatgpt_prompt) 
-        
-        # Временное решение: просто соединяем топ-1 жесты
-        simple_sentence_parts = []
-        if self.current_sentence_predictions:
-            for step_prediction in self.current_sentence_predictions:
-                if step_prediction: 
-                    simple_sentence_parts.append(step_prediction[0][0])
-
-        final_sentence = " ".join(simple_sentence_parts) if simple_sentence_parts else "Не удалось составить предложение."
+        # Получаем ответ от ChatGPT
+        final_sentence = get_chatgpt_response(chatgpt_prompt)
             
-        log_info(f"Сформировано временное предложение: {final_sentence}")
+        log_info(f"Итоговое предложение от ChatGPT: {final_sentence}")
         
         self.last_processed_data_for_saving = {
             'prompt': chatgpt_prompt,
-            'raw_predictions': list(self.current_sentence_predictions), # Сохраняем копию
+            'raw_predictions': list(self.current_sentence_predictions), 
             'final_sentence': final_sentence
         }
         
-        self.text_display.setText(f"Результат: {final_sentence}\n\n(Промпт для языковой модели подготовлен. Ожидается интеграция для улучшения.)")
+        self.text_display.setText(f"Результат: {final_sentence}") # Убрано упоминание промпта, т.к. теперь это реальный результат
         
-        if final_sentence and final_sentence != "Не удалось составить предложение.":
+        if final_sentence and not final_sentence.startswith("Ошибка при обращении к ChatGPT"):
             self.save_button.setEnabled(True)
-        else:
-            self.save_button.setEnabled(False)
             
         self.is_collecting_sentence = False # Завершаем сбор после обработки
         self.current_sentence_predictions = [] # Очищаем для следующего раза
@@ -621,32 +641,42 @@ class RSLRecognitionApp(QMainWindow):
                     input_tensor = np.stack(self.tensors_list[:self.recognizer.window_size], axis=1)[None][None]
                     log_debug(f"Собран входной тензор формы {input_tensor.shape}")
                     
-                    # Получаем результат распознавания
-                    gloss, confidence = self.recognizer.predict(input_tensor)
-                    
-                    # Обновляем информацию для оверлея на видео
-                    if gloss is not None:
-                        self.last_recognized_gloss_for_overlay = gloss
-                        self.last_recognized_confidence_for_overlay = confidence
-                    else: # Если модель ничего не вернула (маловероятно, но для безопасности)
+                    # Получаем результат распознавания - теперь это список топ-N предсказаний
+                    # например, [('жест1', 0.7), ('жест2', 0.15), ('жест3', 0.05)]
+                    top_n_predictions = self.recognizer.predict(input_tensor)
+
+                    if not top_n_predictions: # Если predict вернул пустой список (ошибка или нет предсказаний)
+                        log_warning("Recognizer.predict() не вернул предсказаний.")
                         self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
                         self.last_recognized_confidence_for_overlay = 0.0
-                    
-                    # Обрабатываем предсказание для логики сбора предложений
-                    if gloss is not None:
-                        log_prediction(gloss, confidence, input_shape=input_tensor.shape)
-                    
+                        # Можно добавить обработку такой ситуации, если необходимо
+                    else:
+                        # Берем топ-1 предсказание для оверлея на видео и первичной логики
+                        gloss, confidence = top_n_predictions[0]
+
+                        # Обновляем информацию для оверлея на видео
+                        self.last_recognized_gloss_for_overlay = gloss
+                        self.last_recognized_confidence_for_overlay = confidence
+                        
+                        log_prediction(gloss, confidence, input_shape=input_tensor.shape) # Логируем топ-1
+                        if self.recognizer.debug_mode and len(top_n_predictions) > 1:
+                            # Дополнительно логируем остальные из топ-N, если они есть
+                            log_debug(f"    Топ-{len(top_n_predictions)} предсказания на шаге (из main.py):")
+                            for i, (g, c) in enumerate(top_n_predictions):
+                                log_debug(f"      {i+1}. {g}: {c:.4f}")
+                        
                         if gloss == self.NO_GESTURE_SIGNAL:
                             if self.is_collecting_sentence:
                                 log_info("Обнаружен сигнал NO_GESTURE ('---'), завершение сбора предложения.")
                                 self._process_collected_sentence() 
-                        else: # Распознан содержательный жест
+                        else: # Распознан содержательный жест (топ-1 не "---")
+                            # Проверяем уверенность топ-1 жеста по порогу
                             if confidence < self.recognizer.confidence_threshold: 
-                                log_debug(f"Жест '{gloss}' отброшен из-за низкой уверенности ({confidence:.2f} < {self.recognizer.confidence_threshold})")
+                                log_debug(f"Топ-1 жест '{gloss}' ({confidence:.2f}) отброшен из-за низкой уверенности ( < {self.recognizer.confidence_threshold}). Весь набор топ-{len(top_n_predictions)} для этого шага игнорируется.")
                             else:
-                                # Этот блок выполняется, если жест содержательный и уверенность достаточная
+                                # Уверенность топ-1 жеста достаточная, обрабатываем весь набор топ-N
                                 if not self.is_collecting_sentence:
-                                    log_info(f"Обнаружен первый содержательный жест '{gloss}' ({confidence:.2f}), начало сбора предложения.")
+                                    log_info(f"Обнаружен первый содержательный топ-1 жест '{gloss}' ({confidence:.2f}), начало сбора предложения.")
                                     self.is_collecting_sentence = True
                                     self.current_sentence_predictions = [] 
                                     self.text_display.setText("Идет набор предложения...")
@@ -654,13 +684,10 @@ class RSLRecognitionApp(QMainWindow):
                                     self.save_button.setEnabled(False) 
 
                                 if self.is_collecting_sentence:
-                                    current_step_prediction = [(gloss, confidence)] # Сохраняем как список из одного кортежа для консистентности с будущим топ-N
-                                    self.current_sentence_predictions.append(current_step_prediction)
-                                    log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
-                                    # Активируем кнопку сохранения, если есть что обрабатывать (хотя бы один жест)
-                                    # Но лучше активировать после _process_collected_sentence
+                                    # Добавляем ВЕСЬ СПИСОК топ-N предсказаний для этого шага
+                                    self.current_sentence_predictions.append(list(top_n_predictions)) 
+                                    log_debug(f"Набор из топ-{len(top_n_predictions)} предсказаний (начиная с '{gloss}' ({confidence:.2f})) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
                     
-                    # Очистка буфера кадров (tensors_list) происходит после каждого предсказания window_size
                     self.tensors_list = [] 
                     
                 except Exception as e:
@@ -810,32 +837,42 @@ class RSLRecognitionApp(QMainWindow):
                     input_tensor = np.stack(self.tensors_list[:self.recognizer.window_size], axis=1)[None][None]
                     log_debug(f"Собран входной тензор формы {input_tensor.shape}")
                     
-                    # Получаем результат распознавания
-                    gloss, confidence = self.recognizer.predict(input_tensor)
-                    
-                    # Обновляем информацию для оверлея на видео
-                    if gloss is not None:
-                        self.last_recognized_gloss_for_overlay = gloss
-                        self.last_recognized_confidence_for_overlay = confidence
-                    else: # Если модель ничего не вернула (маловероятно, но для безопасности)
+                    # Получаем результат распознавания - теперь это список топ-N предсказаний
+                    # например, [('жест1', 0.7), ('жест2', 0.15), ('жест3', 0.05)]
+                    top_n_predictions = self.recognizer.predict(input_tensor)
+
+                    if not top_n_predictions: # Если predict вернул пустой список (ошибка или нет предсказаний)
+                        log_warning("Recognizer.predict() не вернул предсказаний.")
                         self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
                         self.last_recognized_confidence_for_overlay = 0.0
-                    
-                    # Обрабатываем предсказание для логики сбора предложений
-                    if gloss is not None:
-                        log_prediction(gloss, confidence, input_shape=input_tensor.shape)
-                    
+                        # Можно добавить обработку такой ситуации, если необходимо
+                    else:
+                        # Берем топ-1 предсказание для оверлея на видео и первичной логики
+                        gloss, confidence = top_n_predictions[0]
+
+                        # Обновляем информацию для оверлея на видео
+                        self.last_recognized_gloss_for_overlay = gloss
+                        self.last_recognized_confidence_for_overlay = confidence
+                        
+                        log_prediction(gloss, confidence, input_shape=input_tensor.shape) # Логируем топ-1
+                        if self.recognizer.debug_mode and len(top_n_predictions) > 1:
+                            # Дополнительно логируем остальные из топ-N, если они есть
+                            log_debug(f"    Топ-{len(top_n_predictions)} предсказания на шаге (из main.py):")
+                            for i, (g, c) in enumerate(top_n_predictions):
+                                log_debug(f"      {i+1}. {g}: {c:.4f}")
+                        
                         if gloss == self.NO_GESTURE_SIGNAL:
                             if self.is_collecting_sentence:
                                 log_info("Обнаружен сигнал NO_GESTURE ('---'), завершение сбора предложения.")
                                 self._process_collected_sentence() 
-                        else: # Распознан содержательный жест
+                        else: # Распознан содержательный жест (топ-1 не "---")
+                            # Проверяем уверенность топ-1 жеста по порогу
                             if confidence < self.recognizer.confidence_threshold: 
-                                log_debug(f"Жест '{gloss}' отброшен из-за низкой уверенности ({confidence:.2f} < {self.recognizer.confidence_threshold})")
+                                log_debug(f"Топ-1 жест '{gloss}' ({confidence:.2f}) отброшен из-за низкой уверенности ( < {self.recognizer.confidence_threshold}). Весь набор топ-{len(top_n_predictions)} для этого шага игнорируется.")
                             else:
-                                # Этот блок выполняется, если жест содержательный и уверенность достаточная
+                                # Уверенность топ-1 жеста достаточная, обрабатываем весь набор топ-N
                                 if not self.is_collecting_sentence:
-                                    log_info(f"Обнаружен первый содержательный жест '{gloss}' ({confidence:.2f}), начало сбора предложения.")
+                                    log_info(f"Обнаружен первый содержательный топ-1 жест '{gloss}' ({confidence:.2f}), начало сбора предложения.")
                                     self.is_collecting_sentence = True
                                     self.current_sentence_predictions = [] 
                                     self.text_display.setText("Идет набор предложения...")
@@ -843,13 +880,10 @@ class RSLRecognitionApp(QMainWindow):
                                     self.save_button.setEnabled(False) 
 
                                 if self.is_collecting_sentence:
-                                    current_step_prediction = [(gloss, confidence)] # Сохраняем как список из одного кортежа для консистентности с будущим топ-N
-                                    self.current_sentence_predictions.append(current_step_prediction)
-                                    log_debug(f"Жест '{gloss}' ({confidence:.2f}) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
-                                    # Активируем кнопку сохранения, если есть что обрабатывать (хотя бы один жест)
-                                    # Но лучше активировать после _process_collected_sentence
+                                    # Добавляем ВЕСЬ СПИСОК топ-N предсказаний для этого шага
+                                    self.current_sentence_predictions.append(list(top_n_predictions)) 
+                                    log_debug(f"Набор из топ-{len(top_n_predictions)} предсказаний (начиная с '{gloss}' ({confidence:.2f})) добавлен в текущее предложение (шаг {len(self.current_sentence_predictions)}).")
                     
-                    # Очистка буфера кадров (tensors_list) происходит после каждого предсказания window_size
                     self.tensors_list = [] 
                     
                 except Exception as e:

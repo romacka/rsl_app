@@ -31,6 +31,7 @@ class RSLRecognizer:
         self.window_size = None
         self.output_names = None
         self.classes = {}
+        self.num_top_predictions = 3
         
         # Параметры из конфигурации
         self.frame_interval = self.config.get('frame_interval', 2)
@@ -39,12 +40,8 @@ class RSLRecognizer:
         
         # Новые параметры из конфигурации
         self.confidence_threshold = self.config.get('confidence_threshold', 0.2)
-        self.smoothing_window = self.config.get('smoothing_window', 3)
         self.debug_mode = self.config.get('debug_mode', False)
         self.expected_output_shape = self.config.get('output_shape', None)
-        
-        # История предсказаний для сглаживания
-        self.prediction_history = []
         
         # Загрузка словаря классов
         if classes_path and os.path.exists(classes_path):
@@ -212,7 +209,7 @@ class RSLRecognizer:
                         providers=providers,
                         provider_options=provider_options
                     )
-                    
+            
                     # Проверяем, какие провайдеры фактически используются
                     used_providers = self.session.get_providers()
                     print(f"Фактически используемые провайдеры: {used_providers}")
@@ -241,7 +238,7 @@ class RSLRecognizer:
             return True
         except Exception as e:
             print(f"Ошибка загрузки модели: {e}")
-            return False
+            return False 
     
     def predict(self, frames_tensor):
         """
@@ -251,10 +248,10 @@ class RSLRecognizer:
             frames_tensor (numpy.ndarray): Тензор с последовательностью кадров
         
         Returns:
-            tuple: (метка, уверенность)
+            list: Список предсказаний (метка, уверенность)
         """
         if self.session is None:
-            return None, 0
+            return []
         
         try:
             # Получаем выходные данные модели
@@ -266,7 +263,7 @@ class RSLRecognizer:
             # Проверяем, что вывод не пустой
             if output is None or output.size == 0:
                 print("Предупреждение: Пустой выходной тензор от модели")
-                return None, 0
+                return []
                 
             # Вывод отладочной информации
             if self.debug_mode:
@@ -311,93 +308,57 @@ class RSLRecognizer:
             # Проверяем, что у нас есть какие-то данные
             if logits.size == 0:
                 print("Предупреждение: Пустой массив логитов после обработки")
-                return None, 0
+                return []
                 
             # Если значений слишком мало (меньше чем классов), возможно что-то не так с выводом
-            if logits.size < 10:  # Предполагаем, что должно быть хотя бы 10 классов
+            if logits.size < self.num_top_predictions:
                 if self.debug_mode:
-                    print(f"Предупреждение: Подозрительно малый размер вывода: {logits.size}")
-                # В этом случае можем вернуть заглушку
-                return "Недостаточно данных", 0.1
+                    print(f"Предупреждение: Размер логитов ({logits.size}) меньше, чем запрашиваемое количество топ-предсказаний ({self.num_top_predictions})")
+                # В этом случае можем вернуть столько, сколько есть, или пустой список
+                # Для простоты, вернем пустой список, чтобы main.py не падал
+                return []
             
             # Находим индекс максимального значения
             try:
                 # Нормализуем значения с помощью softmax для получения вероятностей
-                # Это важно для правильного сравнения уверенности между разными классами
                 exp_logits = np.exp(logits - np.max(logits))
                 probs = exp_logits / np.sum(exp_logits)
                 
-                # Получаем топ-5 предсказаний для отладки
-                top_indices = np.argsort(probs)[-5:][::-1]
-                top_classes = []
-                for idx in top_indices:
-                    class_name = self.classes.get(idx, f"Класс {idx}")
-                    top_classes.append((class_name, float(probs[idx])))
+                # Получаем топ-N индексов и их вероятностей
+                # argsort возвращает индексы, которые бы отсортировали массив.
+                # Берем последние N индексов для наибольших вероятностей.
+                # [:self.num_top_predictions] берет первые N элементов после разворота
+                top_n_indices = np.argsort(probs)[::-1][:self.num_top_predictions] 
+                
+                top_n_predictions = []
+                for idx in top_n_indices:
+                    class_name = self.classes.get(int(idx), f"Класс {int(idx)}") # Убедимся, что idx это int
+                    confidence = float(probs[idx])
+                    top_n_predictions.append((class_name, confidence))
                 
                 if self.debug_mode:
-                    print("Топ-5 предсказаний:")
-                    for i, (class_name, prob) in enumerate(top_classes):
+                    print(f"Топ-{self.num_top_predictions} предсказаний (из RSLRecognizer.predict):")
+                    for i, (class_name, prob) in enumerate(top_n_predictions):
                         print(f"  {i+1}. {class_name}: {prob:.4f}")
                 
-                # Берем предсказание с максимальной вероятностью
-                max_idx = int(np.argmax(probs))
-                confidence = float(probs[max_idx])
-                
-                # Проверяем порог уверенности
-                if confidence < self.confidence_threshold:
-                    if self.debug_mode:
-                        print(f"Предсказание отклонено из-за низкой уверенности: {confidence:.4f} < {self.confidence_threshold}")
-                    return None, confidence
-                
-                # Извлекаем метку из словаря классов
-                if self.classes and max_idx in self.classes:
-                    label = self.classes[max_idx]
-                else:
-                    # Просто возвращаем номер класса, если метки нет в словаре
-                    label = f"Класс {max_idx}"
-                
-                # Применяем сглаживание предсказаний, если включено
-                if self.smoothing_window > 1:
-                    # Добавляем текущее предсказание в историю
-                    self.prediction_history.append((label, confidence))
-                    # Ограничиваем историю размером окна сглаживания
-                    if len(self.prediction_history) > self.smoothing_window:
-                        self.prediction_history = self.prediction_history[-self.smoothing_window:]
-                    
-                    # Если история достаточно заполнена, применяем сглаживание
-                    if len(self.prediction_history) >= self.smoothing_window:
-                        # Подсчитываем частоту каждой метки в окне
-                        label_counts = {}
-                        for hist_label, hist_conf in self.prediction_history:
-                            label_counts[hist_label] = label_counts.get(hist_label, 0) + 1
-                        
-                        # Находим наиболее частую метку
-                        most_common_label = max(label_counts.items(), key=lambda x: x[1])[0]
-                        
-                        # Если текущая метка не совпадает с наиболее частой, 
-                        # и наиболее частая встречается достаточно часто, используем её
-                        if label != most_common_label and label_counts[most_common_label] >= self.smoothing_window // 2:
-                            if self.debug_mode:
-                                print(f"Сглаживание: заменена метка {label} на {most_common_label}")
-                            label = most_common_label
-                
-                # Возвращаем метку и уверенность
-                return label, confidence
+                # Фильтрацию по confidence_threshold и сглаживание теперь будет делать main.py
+                # Просто возвращаем топ-N предсказаний
+                return top_n_predictions
                 
             except IndexError as e:
                 print(f"Ошибка индексации в массиве логитов: {e}")
                 if self.debug_mode:
                     print(f"Размер массива: {logits.size}, форма: {logits.shape}")
-                return None, 0
+                return []
                 
         except IndexError as e:
             # Конкретная обработка ошибок индексации
             print(f"Ошибка индексации при предсказании: {e}")
-            return None, 0
+            return []
         except Exception as e:
             # Общая обработка других ошибок
             print(f"Ошибка при предсказании: {e}")
-            return None, 0
+            return []
     
     @staticmethod
     def resize(im, new_shape=(224, 224)):
@@ -465,5 +426,10 @@ if __name__ == "__main__":
     # Простой тест на случайных данных
     if recognizer.session:
         random_frames = np.random.rand(1, 1, 3, recognizer.window_size, 224, 224).astype(np.float32)
-        label, confidence = recognizer.predict(random_frames)
-        print(f"Тестовое предсказание: {label} (уверенность: {confidence:.4f})") 
+        top_predictions = recognizer.predict(random_frames)
+        print(f"Тестовые топ-{recognizer.num_top_predictions} предсказаний:")
+        if top_predictions:
+            for i, (label, confidence) in enumerate(top_predictions):
+                print(f"  {i+1}. {label}: {confidence:.4f}")
+        else:
+            print("  Предсказаний не получено.") 

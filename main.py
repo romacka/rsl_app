@@ -75,24 +75,37 @@ def get_chatgpt_response(prompt_text):
     model_to_use = "gpt-4.1-nano"
     api_url = "https://api.openai.com/v1/chat/completions"
 
-    payload = {
+    # --- ВРЕМЕННЫЙ ТЕСТ: Отправляем простой payload, как в curl --- 
+    simple_test_payload = {
         "model": model_to_use,
-        "messages": [
-            {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
-            {"role": "user", "content": prompt_text}
-        ],
-        "temperature": 0.5,
-        "max_tokens": 150
+        "messages": [{"role": "user", "content": "Say this is a test!"}],
+        "temperature": 0.7 # Как в curl тесте
+        # "max_tokens": 150 # Можно убрать для теста
     }
+    # Используем simple_test_payload вместо payload для теста
+    payload_to_send = simple_test_payload
+    # -------------------------------------------------------------
+
+    # Оригинальный payload (закомментирован на время теста):
+    # payload = {
+    #     "model": model_to_use,
+    #     "messages": [
+    #         {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
+    #         {"role": "user", "content": prompt_text}
+    #     ],
+    #     "temperature": 0.5,
+    #     "max_tokens": 150
+    # }
+    # payload_to_send = payload
 
     log_info(f"Подготовка запроса в ChatGPT с использованием 'requests' к {api_url}...")
     log_debug(f"Заголовки: {headers}")
-    log_debug(f"Тело запроса (payload) для ChatGPT:\n------ PAYLOAD НАЧАЛО ------\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n------ PAYLOAD КОНЕЦ ------")
+    # Логируем payload, который реально отправляется
+    log_debug(f"Тело запроса (payload) для ChatGPT:\n------ PAYLOAD НАЧАЛО ------\n{json.dumps(payload_to_send, indent=2, ensure_ascii=False)}\n------ PAYLOAD КОНЕЦ ------")
 
     try:
         log_info(f"Отправка запроса в ChatGPT (модель: {model_to_use})...")
-        # Таймаут (connect=10, read=50) = 10с на соединение, 50с на чтение ответа
-        response = requests.post(api_url, headers=headers, json=payload, timeout=(10, 50))
+        response = requests.post(api_url, headers=headers, json=payload_to_send, timeout=60.0)
         
         log_info(f"Ответ от сервера OpenAI получен. Статус-код: {response.status_code}")
         log_debug(f"Заголовки ответа: {response.headers}")

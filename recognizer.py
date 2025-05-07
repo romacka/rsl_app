@@ -164,7 +164,7 @@ class RSLRecognizer:
     
     def load_model(self, model_path):
         """
-        Загружает ONNX модель для распознавания жестов с поддержкой GPU через CUDA или TensorRT
+        Загружает ONNX модель для распознавания жестов с поддержкой GPU через CUDA
         
         Args:
             model_path (str): Путь к файлу модели
@@ -180,12 +180,6 @@ class RSLRecognizer:
             # Список для хранения провайдеров в порядке приоритета
             providers = []
             provider_options = []
-            
-            # Проверяем доступность TensorRT (имеет приоритет над CUDA)
-            if 'TensorrtExecutionProvider' in available_providers:
-                providers.append('TensorrtExecutionProvider')
-                provider_options.append({})
-                print("TensorRT провайдер доступен, будет использован как приоритетный")
             
             # Проверяем доступность CUDA
             if 'CUDAExecutionProvider' in available_providers:
@@ -223,9 +217,7 @@ class RSLRecognizer:
                     used_providers = self.session.get_providers()
                     print(f"Фактически используемые провайдеры: {used_providers}")
                     
-                    if 'TensorrtExecutionProvider' in used_providers:
-                        print(f"Модель {os.path.basename(model_path)} загружена с использованием TensorRT")
-                    elif 'CUDAExecutionProvider' in used_providers:
+                    if 'CUDAExecutionProvider' in used_providers:
                         print(f"Модель {os.path.basename(model_path)} загружена на GPU с использованием CUDA")
                     else:
                         print(f"Модель {os.path.basename(model_path)} загружена на CPU")

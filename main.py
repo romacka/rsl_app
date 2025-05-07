@@ -11,8 +11,12 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
-
 from recognizer import RSLRecognizer
+import PyQt5
+# Задаем пути к плагинам Qt перед созданием приложения
+dirname = os.path.dirname(PyQt5.__file__)
+plugin_path = os.path.join(dirname, 'Qt5', 'plugins', 'platforms')
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
 
 class RSLRecognitionApp(QMainWindow):
     def __init__(self):

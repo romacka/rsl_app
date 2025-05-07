@@ -18,6 +18,7 @@ from PyQt5.QtGui import QImage, QPixmap
 import PyQt5
 # REMOVE: from model import get_model
 # REMOVE: from recognition import GestureRecognition
+from recognizer import RSLRecognizer 
 
 # Задаем пути к плагинам Qt перед созданием приложения
 dirname = os.path.dirname(PyQt5.__file__)

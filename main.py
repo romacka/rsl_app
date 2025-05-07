@@ -548,11 +548,15 @@ class RSLRecognitionApp(QMainWindow):
             log_warning("Не удалось получить кадр с камеры")
             return
         
+        # Добавляем на кадр распознанный жест
+        frame_with_text = frame.copy()
+        
         # Используем self.last_recognized_gloss_for_overlay и self.last_recognized_confidence_for_overlay
+        # для наложения текста на видеокадр, а не старые prediction_list/confidence_list
         current_gloss_to_display = self.last_recognized_gloss_for_overlay
         current_confidence_to_display = self.last_recognized_confidence_for_overlay
 
-        if current_gloss_to_display != self.NO_GESTURE_SIGNAL :
+        if current_gloss_to_display != self.NO_GESTURE_SIGNAL: # Проверяем, что есть что отображать
             text = current_gloss_to_display
             confidence = current_confidence_to_display
             display_text = f"{text} ({confidence:.2f})"
@@ -573,7 +577,7 @@ class RSLRecognitionApp(QMainWindow):
             # Добавляем фон для текста для лучшей читаемости
             text_size, _ = cv2.getTextSize(display_text, font, font_scale, font_thickness)
             cv2.rectangle(
-                frame, 
+                frame_with_text, 
                 (text_position[0] - 10, text_position[1] - text_size[1] - 10),
                 (text_position[0] + text_size[0] + 10, text_position[1] + 10),
                 (0, 0, 0),  # Черный фон
@@ -582,16 +586,16 @@ class RSLRecognitionApp(QMainWindow):
             
             # Добавляем текст
             cv2.putText(
-                frame, display_text, text_position, font, font_scale, 
+                frame_with_text, display_text, text_position, font, font_scale, 
                 text_color, font_thickness, cv2.LINE_AA
             )
         
         # Если идет запись, сохраняем кадр
         if self.is_recording and self.video_writer:
-            self.video_writer.write(frame)
+            self.video_writer.write(frame_with_text)
         
         # Подготовка кадра для отображения
-        frame_for_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_for_display = cv2.cvtColor(frame_with_text, cv2.COLOR_BGR2RGB)
         h, w, ch = frame_for_display.shape
         bytes_per_line = ch * w
         qt_image = QImage(frame_for_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
@@ -736,10 +740,15 @@ class RSLRecognitionApp(QMainWindow):
         
         # Добавляем на кадр распознанный жест
         frame_with_text = frame.copy()
-        if self.prediction_list and self.prediction_list[-1] != "---":
-            # Добавляем текст с распознанным жестом и уверенностью
-            text = self.prediction_list[-1]
-            confidence = self.confidence_list[-1] if len(self.confidence_list) > 0 else 0.0
+        
+        # Используем self.last_recognized_gloss_for_overlay и self.last_recognized_confidence_for_overlay
+        # для наложения текста на видеокадр, а не старые prediction_list/confidence_list
+        current_gloss_to_display = self.last_recognized_gloss_for_overlay
+        current_confidence_to_display = self.last_recognized_confidence_for_overlay
+
+        if current_gloss_to_display != self.NO_GESTURE_SIGNAL: # Проверяем, что есть что отображать
+            text = current_gloss_to_display
+            confidence = current_confidence_to_display
             display_text = f"{text} ({confidence:.2f})"
             
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -811,25 +820,25 @@ class RSLRecognitionApp(QMainWindow):
                     
                     # Обрабатываем корректно результат распознавания
                     if gloss is not None and confidence > self.recognizer.confidence_threshold:
-                        if gloss != self.prediction_list[-1]:
-                            self.prediction_list.append(gloss)
-                            self.confidence_list.append(confidence)
+                        if gloss != self.last_recognized_gloss_for_overlay:
+                            self.last_recognized_gloss_for_overlay = gloss
+                            self.last_recognized_confidence_for_overlay = confidence
                             
                             # Ограничиваем список предсказаний последними 5 элементами
-                            if len(self.prediction_list) > 5:
-                                self.prediction_list = self.prediction_list[-5:]
-                                self.confidence_list = self.confidence_list[-5:]
+                            if len(self.last_recognized_gloss_for_overlay) > 5:
+                                self.last_recognized_gloss_for_overlay = self.last_recognized_gloss_for_overlay[-5:]
+                                self.last_recognized_confidence_for_overlay = self.last_recognized_confidence_for_overlay[-5:]
                             
                             # Активируем кнопку сохранения, если есть результаты
-                            if not self.save_button.isEnabled() and len([g for g in self.prediction_list if g != "---"]) > 0:
+                            if not self.save_button.isEnabled() and len([g for g in self.last_recognized_gloss_for_overlay if g != "---"]) > 0:
                                 self.save_button.setEnabled(True)
                             
                             # Обновление отображения результатов
                             result_text = ""
-                            for i in range(len(self.prediction_list)):
-                                if self.prediction_list[i] != "---":
-                                    conf = self.confidence_list[i] if i < len(self.confidence_list) else 0.0
-                                    result_text += f"{self.prediction_list[i]} ({conf:.2f})  "
+                            for i in range(len(self.last_recognized_gloss_for_overlay)):
+                                if self.last_recognized_gloss_for_overlay[i] != "---":
+                                    conf = self.last_recognized_confidence_for_overlay[i] if i < len(self.last_recognized_confidence_for_overlay) else 0.0
+                                    result_text += f"{self.last_recognized_gloss_for_overlay[i]} ({conf:.2f})  "
                             
                             self.text_display.setText(result_text)
                             log_info(f"Обновлен результат: {result_text}")

@@ -173,30 +173,48 @@ class RSLRecognizer:
             bool: True, если загрузка успешна, иначе False
         """
         try:
-            # Создаем провайдеры выполнения с приоритетом для GPU
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            
             # Отображаем доступные провайдеры
-            print(f"Доступные провайдеры ONNX Runtime: {ort.get_available_providers()}")
+            available_providers = ort.get_available_providers()
+            print(f"Доступные провайдеры ONNX Runtime: {available_providers}")
             
-            # Создаем сессию с указанными провайдерами
-            self.session = ort.InferenceSession(model_path, providers=providers)
-            
-            # Проверяем, используется ли GPU
-            session_providers = self.session.get_providers()
-            if 'CUDAExecutionProvider' in session_providers:
-                print(f"Модель {os.path.basename(model_path)} загружена на GPU")
+            # Создаем сессию с указанным провайдером в зависимости от доступности
+            if 'CUDAExecutionProvider' in available_providers:
+                # Если CUDA доступен, используем его с опциями
+                providers = ['CUDAExecutionProvider']
+                provider_options = [{'device_id': 0}]  # Опции для CUDA провайдера
+                
+                # Создаем сессию с указанными провайдерами и опциями
+                try:
+                    self.session = ort.InferenceSession(
+                        model_path, 
+                        providers=providers,
+                        provider_options=provider_options
+                    )
+                    print(f"Модель {os.path.basename(model_path)} загружена на GPU")
+                except Exception as e:
+                    print(f"Ошибка при загрузке на GPU: {e}")
+                    print("Пробуем загрузить модель на CPU...")
+                    self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+                    print(f"Модель {os.path.basename(model_path)} загружена на CPU")
             else:
+                # Если CUDA недоступен, используем только CPU
+                self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
                 print(f"GPU не доступен, модель {os.path.basename(model_path)} загружена на CPU")
             
+            # Получаем информацию о входном и выходном тензорах
             self.input_name = self.session.get_inputs()[0].name
             self.input_shape = self.session.get_inputs()[0].shape
             self.window_size = self.input_shape[3]
             self.output_names = [output.name for output in self.session.get_outputs()]
+            
+            # Выводим используемые провайдеры
+            used_providers = self.session.get_providers()
+            print(f"Фактически используемые провайдеры: {used_providers}")
+            
             return True
         except Exception as e:
             print(f"Ошибка загрузки модели: {e}")
-            return False 
+            return False
     
     def predict(self, frames_tensor):
         """

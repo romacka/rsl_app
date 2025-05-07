@@ -16,7 +16,6 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 # from recognizer import RSLRecognizer # This line seems to be original, keeping it.
 import PyQt5
-from PIL import Image
 # REMOVE: from model import get_model
 # REMOVE: from recognition import GestureRecognition
 

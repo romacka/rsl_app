@@ -5,6 +5,9 @@ import numpy as np
 import yaml
 import datetime
 from pathlib import Path
+# Настройка для правильного отображения русских символов в консоли
+if os.name == 'nt':  # Для Windows
+    os.system('chcp 65001')
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QComboBox, QLabel, QVBoxLayout, 
     QHBoxLayout, QWidget, QPushButton, QFileDialog, QStatusBar, QMessageBox
@@ -12,12 +15,36 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from recognizer import RSLRecognizer
-from debug_log import debug_logger, log_info, log_warning, log_error, log_prediction
 import PyQt5
 # Задаем пути к плагинам Qt перед созданием приложения
 dirname = os.path.dirname(PyQt5.__file__)
 plugin_path = os.path.join(dirname, 'Qt5', 'plugins', 'platforms')
 os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
+
+# Простые функции для логирования
+def log_info(message):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] [INFO] {message}")
+
+def log_warning(message):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] [WARNING] {message}")
+
+def log_error(message, exception=None):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    error_msg = f"{message}" + (f" - {str(exception)}" if exception else "")
+    print(f"[{timestamp}] [ERROR] {error_msg}")
+    
+def log_debug(message):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] [DEBUG] {message}")
+    
+def log_prediction(gloss, confidence, input_shape=None):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    message = f"Предсказание: {gloss}, Уверенность: {confidence:.4f}"
+    if input_shape:
+        message += f", Форма входных данных: {input_shape}"
+    print(f"[{timestamp}] [PREDICTION] {message}")
 
 class RSLRecognitionApp(QMainWindow):
     def __init__(self):

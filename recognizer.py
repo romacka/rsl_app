@@ -164,7 +164,7 @@ class RSLRecognizer:
     
     def load_model(self, model_path):
         """
-        Загружает ONNX модель для распознавания жестов с поддержкой GPU
+        Загружает ONNX модель для распознавания жестов с поддержкой GPU через CUDA или TensorRT
         
         Args:
             model_path (str): Путь к файлу модели
@@ -177,39 +177,74 @@ class RSLRecognizer:
             available_providers = ort.get_available_providers()
             print(f"Доступные провайдеры ONNX Runtime: {available_providers}")
             
-            # Создаем сессию с указанным провайдером в зависимости от доступности
+            # Список для хранения провайдеров в порядке приоритета
+            providers = []
+            provider_options = []
+            
+            # Проверяем доступность TensorRT (имеет приоритет над CUDA)
+            if 'TensorrtExecutionProvider' in available_providers:
+                providers.append('TensorrtExecutionProvider')
+                provider_options.append({})
+                print("TensorRT провайдер доступен, будет использован как приоритетный")
+            
+            # Проверяем доступность CUDA
             if 'CUDAExecutionProvider' in available_providers:
-                # Если CUDA доступен, используем его с опциями
-                providers = ['CUDAExecutionProvider']
-                provider_options = [{'device_id': 0}]  # Опции для CUDA провайдера
-                
-                # Создаем сессию с указанными провайдерами и опциями
+                providers.append('CUDAExecutionProvider')
+                cuda_options = {
+                    'device_id': 0,
+                    'gpu_mem_limit': 2 * 1024 * 1024 * 1024,  # Лимит памяти GPU (2 ГБ)
+                    'arena_extend_strategy': 'kNextPowerOfTwo',
+                    'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                    'do_copy_in_default_stream': True,
+                }
+                provider_options.append(cuda_options)
+                print("CUDA провайдер доступен, будет использован")
+            
+            # Всегда добавляем CPU как запасной вариант
+            providers.append('CPUExecutionProvider')
+            provider_options.append({})
+            
+            # Создаем сессию с указанными провайдерами в порядке приоритета
+            if providers:
                 try:
+                    # Создаем опции сессии для оптимизации производительности
+                    session_options = ort.SessionOptions()
+                    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    
+                    # Создаем сессию с указанными провайдерами и опциями
                     self.session = ort.InferenceSession(
                         model_path, 
+                        sess_options=session_options,
                         providers=providers,
                         provider_options=provider_options
                     )
-                    print(f"Модель {os.path.basename(model_path)} загружена на GPU")
+                    
+                    # Проверяем, какие провайдеры фактически используются
+                    used_providers = self.session.get_providers()
+                    print(f"Фактически используемые провайдеры: {used_providers}")
+                    
+                    if 'TensorrtExecutionProvider' in used_providers:
+                        print(f"Модель {os.path.basename(model_path)} загружена с использованием TensorRT")
+                    elif 'CUDAExecutionProvider' in used_providers:
+                        print(f"Модель {os.path.basename(model_path)} загружена на GPU с использованием CUDA")
+                    else:
+                        print(f"Модель {os.path.basename(model_path)} загружена на CPU")
+                        
                 except Exception as e:
-                    print(f"Ошибка при загрузке на GPU: {e}")
+                    print(f"Ошибка при загрузке с GPU: {e}")
                     print("Пробуем загрузить модель на CPU...")
                     self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
                     print(f"Модель {os.path.basename(model_path)} загружена на CPU")
             else:
-                # Если CUDA недоступен, используем только CPU
-                self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
-                print(f"GPU не доступен, модель {os.path.basename(model_path)} загружена на CPU")
+                # Запасной вариант, если нет доступных провайдеров
+                self.session = ort.InferenceSession(model_path)
+                print(f"Модель {os.path.basename(model_path)} загружена с использованием провайдера по умолчанию")
             
             # Получаем информацию о входном и выходном тензорах
             self.input_name = self.session.get_inputs()[0].name
             self.input_shape = self.session.get_inputs()[0].shape
             self.window_size = self.input_shape[3]
             self.output_names = [output.name for output in self.session.get_outputs()]
-            
-            # Выводим используемые провайдеры
-            used_providers = self.session.get_providers()
-            print(f"Фактически используемые провайдеры: {used_providers}")
             
             return True
         except Exception as e:

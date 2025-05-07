@@ -7,7 +7,9 @@ import datetime
 from pathlib import Path
 from recognizer import RSLRecognizer
 from dotenv import load_dotenv
-import openai
+# import openai # Убираем импорт openai, так как будем использовать requests
+import requests # <--- Добавляем импорт requests
+import json # <--- Добавляем импорт json для работы с телом запроса
 # Настройка для правильного отображения русских символов в консоли
 if os.name == 'nt':  # Для Windows
     os.system('chcp 65001')
@@ -56,73 +58,77 @@ def log_prediction(gloss, confidence, input_shape=None):
         message += f", Форма входных данных: {input_shape}"
     print(f"[{timestamp}] [PREDICTION] {message}")
 
-# Функция для вызова API ChatGPT (синхронная версия)
+# Функция для вызова API ChatGPT с использованием requests
 def get_chatgpt_response(prompt_text):
-    client = openai.OpenAI() 
-    try:
-        log_info("Подготовка запроса в ChatGPT...")
-        # Логируем полный промпт, который будет отправлен
-        log_debug(f"Промпт для ChatGPT перед отправкой:\n------ ПРОМПТ НАЧАЛО ------\n{prompt_text}\n------ ПРОМПТ КОНЕЦ ------")
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        log_error("API-ключ OpenAI не найден в переменных окружения.")
+        return "Ошибка: API-ключ OpenAI не настроен."
 
-        messages_for_api = [
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Используем стандартную модель и эндпоинт Chat Completions
+    # Если вы хотите использовать gpt-4.1-nano и другой эндпоинт, их нужно будет указать здесь
+    model_to_use = "gpt-4.1-nano"
+    api_url = "https://api.openai.com/v1/chat/completions"
+
+    payload = {
+        "model": model_to_use,
+        "messages": [
             {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
             {"role": "user", "content": prompt_text}
-        ]
-        
-        log_info(f"Отправка запроса в ChatGPT с моделью gpt-4.1-nano...")
-        completion_response = client.chat.completions.create(
-            model="gpt-4.1-nano", 
-            messages=messages_for_api,
-            temperature=0.5, 
-            max_tokens=150 
-        )
-        
-        log_info("Ответ от ChatGPT получен (сырой объект).")
-        # Логируем весь объект ответа для детального анализа
-        log_debug(f"Полный объект Completion от OpenAI: {completion_response.model_dump_json(indent=2)}")
+        ],
+        "temperature": 0.5,
+        "max_tokens": 150
+    }
 
-        if completion_response.choices and len(completion_response.choices) > 0:
-            message = completion_response.choices[0].message
-            log_debug(f"Объект Message от OpenAI: {message}")
-            if message.content:
-                response_text = message.content.strip()
+    log_info(f"Подготовка запроса в ChatGPT с использованием 'requests' к {api_url}...")
+    log_debug(f"Заголовки: {headers}")
+    log_debug(f"Тело запроса (payload) для ChatGPT:\n------ PAYLOAD НАЧАЛО ------\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n------ PAYLOAD КОНЕЦ ------")
+
+    try:
+        log_info(f"Отправка запроса в ChatGPT (модель: {model_to_use})...")
+        # Таймаут (connect=10, read=50) = 10с на соединение, 50с на чтение ответа
+        response = requests.post(api_url, headers=headers, json=payload, timeout=(10, 50))
+        
+        log_info(f"Ответ от сервера OpenAI получен. Статус-код: {response.status_code}")
+        log_debug(f"Заголовки ответа: {response.headers}")
+        log_debug(f"Тело ответа (сырое):\n------ ТЕЛО ОТВЕТА НАЧАЛО ------\n{response.text}\n------ ТЕЛО ОТВЕТА КОНЕЦ ------")
+
+        response.raise_for_status()  # Вызовет исключение для HTTP-ошибок (4xx или 5xx)
+
+        response_data = response.json()
+        if response_data.get("choices") and len(response_data["choices"]) > 0:
+            message = response_data["choices"][0].get("message")
+            if message and message.get("content"):
+                response_text = message["content"].strip()
                 log_info(f"Извлеченный текст ответа: {response_text}")
                 return response_text
             else:
-                log_warning("Ответ от ChatGPT (choices[0].message) не содержит атрибута 'content' или он None.")
-                return "Ответ от ChatGPT не содержит текстового контента (content is None)."
+                log_warning("Ответ от ChatGPT не содержит 'message.content'.")
+                return "Ответ от ChatGPT не содержит ожидаемого текста."
         else:
-            log_warning("Ответ от ChatGPT не содержит 'choices' или список 'choices' пуст.")
+            log_warning("Ответ от ChatGPT не содержит 'choices'.")
             return "Не удалось получить корректный ответ от ChatGPT (нет 'choices')."
 
-    except openai.APIConnectionError as e:
-        log_error(f"Ошибка соединения с API OpenAI. Убедитесь, что есть доступ в интернет и адрес API доступен. {e}", e)
+    except requests.exceptions.Timeout as e:
+        log_error(f"Таймаут запроса к API OpenAI: {e}", e)
+        return f"Таймаут при обращении к OpenAI: {e}"
+    except requests.exceptions.ConnectionError as e:
+        log_error(f"Ошибка соединения с API OpenAI: {e}", e)
         return f"Ошибка соединения с OpenAI: {e}"
-    except openai.RateLimitError as e:
-        log_error(f"Превышен лимит запросов к API OpenAI. Попробуйте позже или проверьте лимиты вашего аккаунта. {e}", e)
-        return f"Превышен лимит запросов к OpenAI: {e}"
-    except openai.AuthenticationError as e:
-        log_error(f"Ошибка аутентификации с API OpenAI. Проверьте правильность и действительность вашего API-ключа. {e}", e)
-        return f"Ошибка аутентификации OpenAI (проверьте API-ключ): {e}"
-    except openai.NotFoundError as e: # Такая ошибка может быть, если указана несуществующая модель
-        log_error(f"Ошибка NotFound при запросе к OpenAI API (возможно, указана неверная модель или эндпоинт): {e}", e)
-        # Попытка извлечь детали из объекта ошибки
-        if hasattr(e, 'response') and e.response is not None:
-            log_debug(f"Детали HTTP ответа при NotFoundError: Status Code: {e.response.status_code}, Body: {e.response.text}")
-        return f"Ошибка NotFound при запросе к OpenAI (модель/эндпоинт?): {e}"
-    except openai.APIStatusError as e: # Другие ошибки API, не покрытые выше
-        log_error(f"Ошибка статуса API OpenAI (HTTP статус {e.status_code}): {e.message}", e)
-        if hasattr(e, 'response') and e.response is not None:
-            log_debug(f"Тело HTTP ответа при APIStatusError: {e.response.text}")
-        return f"Ошибка API OpenAI (статус {e.status_code}): {e.message}"
-    except Exception as e: # Общий обработчик для других непредвиденных ошибок
-        log_error(f"Непредвиденная ошибка при вызове API ChatGPT: {type(e).__name__} - {e}", e)
-        # Попытка извлечь детали, если это ошибка от OpenAI SDK, у которой есть response
-        if hasattr(e, 'response') and e.response is not None and hasattr(e, 'status_code') and hasattr(e, 'text'):
-            log_debug(f"Детали HTTP ответа при общей ошибке: Status Code: {e.response.status_code}, Body: {e.response.text}")
-        elif hasattr(e, 'status_code'): # Для некоторых ошибок OpenAI может быть только status_code
-             log_debug(f"HTTP Status Code при ошибке: {e.status_code}")
-        return f"Общая ошибка при обращении к ChatGPT: {type(e).__name__} - {str(e)}"
+    except requests.exceptions.HTTPError as e:
+        log_error(f"HTTP ошибка при запросе к API OpenAI: {e}. Статус: {e.response.status_code}. Ответ: {e.response.text}", e)
+        return f"HTTP ошибка {e.response.status_code} от OpenAI: {e.response.json().get('error',{}).get('message', e.response.text)}"
+    except requests.exceptions.RequestException as e:
+        log_error(f"Общая ошибка requests при вызове API ChatGPT: {e}", e)
+        return f"Общая ошибка requests при обращении к ChatGPT: {e}"
+    except Exception as e:
+        log_error(f"Непредвиденная ошибка при обработке ответа от ChatGPT: {type(e).__name__} - {e}", e)
+        return f"Непредвиденная ошибка: {type(e).__name__} - {str(e)}"
 
 class RSLRecognitionApp(QMainWindow):
     def __init__(self):
@@ -397,7 +403,7 @@ class RSLRecognitionApp(QMainWindow):
         self.config_path_button.setEnabled(False)
         
         # Запуск таймера для обновления кадров
-        self.timer.start(30)  # 30 мс ~ 33 кадра в секунду
+        self.timer.start(30)
         self.text_display.setText("Жду ввода предложения...") # Начальное сообщение при старте
         log_info("Распознавание запущено")
         self.statusBar().showMessage("Распознавание запущено. Жду ввода предложения...")

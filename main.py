@@ -7,9 +7,10 @@ import datetime
 from pathlib import Path
 from recognizer import RSLRecognizer
 from dotenv import load_dotenv
-# import openai # Убираем импорт openai, так как будем использовать requests
-import requests # <--- Добавляем импорт requests
-import json # <--- Добавляем импорт json для работы с телом запроса
+import openai # <--- Раскомментируем openai
+# import requests # <--- Комментируем requests
+# import json # <--- Комментируем json
+import httpx # <--- Добавляем импорт httpx
 # Настройка для правильного отображения русских символов в консоли
 if os.name == 'nt':  # Для Windows
     os.system('chcp 65001')
@@ -65,58 +66,66 @@ def get_chatgpt_response(prompt_text):
         log_error("API-ключ OpenAI не найден в переменных окружения.")
         return "Ошибка: API-ключ OpenAI не настроен."
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    # openai.api_key = api_key # Устанавливаем ключ для библиотеки openai
+    # org_id = os.getenv("OPENAI_ORG_ID") # Если используется ключ проекта, может потребоваться ID организации
+    # if org_id:
+    #    openai.organization = org_id
 
     # Используем стандартную модель и эндпоинт Chat Completions
     # Если вы хотите использовать gpt-4.1-nano и другой эндпоинт, их нужно будет указать здесь
-    model_to_use = "gpt-4.1-nano"
-    api_url = "https://api.openai.com/v1/chat/completions"
+    model_to_use = "gpt-4.1-nano" # Оставляем модель, которую вы использовали
+    # api_url = "https://api.openai.com/v1/chat/completions" # Не используется с библиотекой openai
 
     # --- Убираем ВРЕМЕННЫЙ ТЕСТ --- 
     # simple_test_payload = {
-    #     "model": model_to_use,
-    #     "messages": [{"role": "user", "content": "Say this is a test!"}],
-    #     "temperature": 0.7 
+    # "model": model_to_use,
+    # "messages": [{"role": "user", "content": "Say this is a test!"}],
+    # "temperature": 0.7 
     # }
     # payload_to_send = simple_test_payload
     # -------------------------------------------------------------
 
-    # Возвращаем оригинальный payload с prompt_text:
-    payload = {
-        "model": model_to_use,
-        "messages": [
-            {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
-            {"role": "user", "content": prompt_text}
-        ],
-        "temperature": 0.5,
-        "max_tokens": 150
-    }
-    payload_to_send = payload # Используем оригинальный payload
-
-    log_info(f"Подготовка запроса в ChatGPT с использованием 'requests' к {api_url}...")
-    log_debug(f"Заголовки: {headers}")
-    # Логируем payload, который реально отправляется
-    log_debug(f"Тело запроса (payload) для ChatGPT:\n------ PAYLOAD НАЧАЛО ------\n{json.dumps(payload_to_send, indent=2, ensure_ascii=False)}\n------ PAYLOAD КОНЕЦ ------")
+    messages = [
+        {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
+        {"role": "user", "content": prompt_text}
+    ]
+    
+    log_info(f"Подготовка запроса в ChatGPT с использованием библиотеки 'openai' (модель: {model_to_use})...")
+    # log_debug(f"Тело запроса (messages) для ChatGPT:\n------ MESSAGES НАЧАЛО ------\n{json.dumps(messages, indent=2, ensure_ascii=False)}\n------ MESSAGES КОНЕЦ ------") # json.dumps здесь не нужен, так как json не импортируется
 
     try:
         log_info(f"Отправка запроса в ChatGPT (модель: {model_to_use})...")
-        # Оставляем proxies=None и verify=False для продолжения диагностики
-        response = requests.post(api_url, headers=headers, json=payload_to_send, timeout=60.0, proxies=None, verify=False)
         
-        log_info(f"Ответ от сервера OpenAI получен. Статус-код: {response.status_code}")
-        log_debug(f"Заголовки ответа: {response.headers}")
-        log_debug(f"Тело ответа (сырое):\n------ ТЕЛО ОТВЕТА НАЧАЛО ------\n{response.text}\n------ ТЕЛО ОТВЕТА КОНЕЦ ------")
+        # --- ДИАГНОСТИКА SSL: Начало ---
+        # Попробуем отключить SSL-верификацию для диагностики FileNotFoundError
+        # Это НЕ рекомендуется для постоянного использования!
+        # Если это поможет, значит проблема в SSL-сертификатах вашего окружения.
+        custom_httpx_client = httpx.Client(verify=False)
+        client = openai.OpenAI(api_key=api_key, http_client=custom_httpx_client)
+        # --- ДИАГНОСТИКА SSL: Конец ---
+        
+        # Старая инициализация клиента (закомментирована для теста):
+        # client = openai.OpenAI(api_key=api_key) 
 
-        response.raise_for_status()  # Вызовет исключение для HTTP-ошибок (4xx или 5xx)
+        # org_id = os.getenv("OPENAI_ORG_ID")
+        # if org_id:
+        # client.organization = org_id # Эта строка была закомментирована и так и останется
 
-        response_data = response.json()
-        if response_data.get("choices") and len(response_data["choices"]) > 0:
-            message = response_data["choices"][0].get("message")
-            if message and message.get("content"):
-                response_text = message["content"].strip()
+        response = client.chat.completions.create(
+            model=model_to_use,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=150,
+            timeout=60.0 # Таймаут в секундах
+        )
+        
+        # log_info(f"Ответ от сервера OpenAI получен.") 
+        # log_debug(f"Объект ответа (сырой):\n------ ОБЪЕКТ ОТВЕТА НАЧАЛО ------\n{response}\n------ ОБЪЕКТ ОТВЕТА КОНЕЦ ------")
+
+        if response.choices and len(response.choices) > 0:
+            message = response.choices[0].message
+            if message and message.content:
+                response_text = message.content.strip()
                 log_info(f"Извлеченный текст ответа: {response_text}")
                 return response_text
             else:
@@ -126,21 +135,47 @@ def get_chatgpt_response(prompt_text):
             log_warning("Ответ от ChatGPT не содержит 'choices'.")
             return "Не удалось получить корректный ответ от ChatGPT (нет 'choices')."
 
-    except requests.exceptions.Timeout as e:
-        log_error(f"Таймаут запроса к API OpenAI: {e}", e)
-        return f"Таймаут при обращении к OpenAI: {e}"
-    except requests.exceptions.ConnectionError as e:
+    except openai.APIConnectionError as e:
         log_error(f"Ошибка соединения с API OpenAI: {e}", e)
         return f"Ошибка соединения с OpenAI: {e}"
-    except requests.exceptions.HTTPError as e:
-        log_error(f"HTTP ошибка при запросе к API OpenAI: {e}. Статус: {e.response.status_code}. Ответ: {e.response.text}", e)
-        return f"HTTP ошибка {e.response.status_code} от OpenAI: {e.response.json().get('error',{}).get('message', e.response.text)}"
-    except requests.exceptions.RequestException as e:
-        log_error(f"Общая ошибка requests при вызове API ChatGPT: {e}", e)
-        return f"Общая ошибка requests при обращении к ChatGPT: {e}"
-    except Exception as e:
-        log_error(f"Непредвиденная ошибка при обработке ответа от ChatGPT: {type(e).__name__} - {e}", e)
-        return f"Непредвиденная ошибка: {type(e).__name__} - {str(e)}"
+    except openai.RateLimitError as e:
+        log_error(f"Превышен лимит запросов к API OpenAI: {e}", e)
+        return f"Превышен лимит запросов к OpenAI: {e}"
+    except openai.AuthenticationError as e:
+        log_error(f"Ошибка аутентификации с API OpenAI (проверьте API-ключ): {e}", e)
+        error_details = str(e)
+        if hasattr(e, 'response') and e.response and hasattr(e.response, 'json'): # Проверяем, есть ли json метод
+            try:
+                error_json = e.response.json()
+                if 'error' in error_json and 'message' in error_json['error']:
+                    error_details = error_json['error']['message']
+            except Exception: # Не удалось распарсить json или другая ошибка
+                pass # Используем error_details, который уже str(e)
+        return f"Ошибка аутентификации с OpenAI: {error_details}"
+    except openai.APIStatusError as e: # Обработка других ошибок API (например, 4xx, 5xx, кроме 401, 429)
+        log_error(f"Ошибка API OpenAI: статус {e.status_code}, ответ: {e.response}", e)
+        error_message = f"Ошибка API OpenAI (статус {e.status_code})"
+        if hasattr(e, 'response') and e.response:
+            try:
+                # Попытка получить JSON из ответа, если возможно
+                if hasattr(e.response, 'json'): 
+                    error_json = e.response.json()
+                    if 'error' in error_json and 'message' in error_json['error']:
+                        error_message += f": {error_json['error']['message']}"
+                    else:
+                        # Если нет стандартной структуры, пытаемся получить текст ответа
+                        error_message += f": {e.response.text}"
+                else:
+                     error_message += f": {e.response.text}" # Если response не имеет метода json()
+            except Exception:
+                 error_message += f": {e.response.text if hasattr(e.response, 'text') else 'Нет текста ошибки'}" # Если не json или другая ошибка при парсинге
+        return error_message
+    except openai.APITimeoutError as e: # Явный таймаут от библиотеки openai
+        log_error(f"Таймаут запроса к API OpenAI (openai library): {e}", e)
+        return f"Таймаут при обращении к OpenAI (openai library): {e}"
+    except Exception as e: # Общая непредвиденная ошибка
+        log_error(f"Непредвиденная ошибка при вызове API ChatGPT через библиотеку openai: {type(e).__name__} - {e}", e)
+        return f"Непредвиденная ошибка (openai library): {type(e).__name__} - {str(e)}"
 
 class RSLRecognitionApp(QMainWindow):
     def __init__(self):

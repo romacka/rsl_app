@@ -56,96 +56,84 @@ def log_prediction(gloss, confidence, input_shape=None):
 
 # Функция для вызова API ChatGPT с использованием requests
 def get_chatgpt_response(prompt_text):
-    # api_key = os.getenv("OPENAI_API_KEY")
-    # if not api_key:
-    #     log_error("API-ключ OpenAI не найден в переменных окружения.")
-    #     return "Ошибка: API-ключ OpenAI не настроен."
-    # model_to_use = "gpt-4.1-mini"
-    # messages = [
-    #     {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
-    #     {"role": "user", "content": prompt_text}
-    # ]
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        log_error("API-ключ OpenAI не найден в переменных окружения.")
+        return "Ошибка: API-ключ OpenAI не настроен."
+    model_to_use = "gpt-4.1-mini"
+    messages = [
+        {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
+        {"role": "user", "content": prompt_text}
+    ]
     
-    # log_info(f"Подготовка запроса в ChatGPT с использованием библиотеки 'openai' (модель: {model_to_use})...")
+    log_info(f"Подготовка запроса в ChatGPT с использованием библиотеки 'openai' (модель: {model_to_use})...")
 
-    # try:
-    #     log_info(f"Отправка запроса в ChatGPT (модель: {model_to_use})...")
-    #     custom_httpx_client = httpx.Client(verify=False)
-    #     client = openai.OpenAI(api_key=api_key, http_client=custom_httpx_client)
-    #     response = client.chat.completions.create(
-    #         model=model_to_use,
-    #         messages=messages,
-    #         temperature=0.5,
-    #         max_tokens=150,
-    #         timeout=60.0 
-    #     )
+    try:
+        log_info(f"Отправка запроса в ChatGPT (модель: {model_to_use})...")
+        custom_httpx_client = httpx.Client(verify=False)
+        client = openai.OpenAI(api_key=api_key, http_client=custom_httpx_client)
+        response = client.chat.completions.create(
+            model=model_to_use,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=150,
+            timeout=60.0 
+        )
 
-    #     if response.choices and len(response.choices) > 0:
-    #         message = response.choices[0].message
-    #         if message and message.content:
-    #             response_text = message.content.strip()
-    #             log_info(f"Извлеченный текст ответа: {response_text}")
-    #             return response_text
-    #         else:
-    #             log_warning("Ответ от ChatGPT не содержит 'message.content'.")
-    #             return "Ответ от ChatGPT не содержит ожидаемого текста."
-    #     else:
-    #         log_warning("Ответ от ChatGPT не содержит 'choices'.")
-    #         return "Не удалось получить корректный ответ от ChatGPT (нет 'choices')."
+        if response.choices and len(response.choices) > 0:
+            message = response.choices[0].message
+            if message and message.content:
+                response_text = message.content.strip()
+                log_info(f"Извлеченный текст ответа: {response_text}")
+                return response_text
+            else:
+                log_warning("Ответ от ChatGPT не содержит 'message.content'.")
+                return "Ответ от ChatGPT не содержит ожидаемого текста."
+        else:
+            log_warning("Ответ от ChatGPT не содержит 'choices'.")
+            return "Не удалось получить корректный ответ от ChatGPT (нет 'choices')."
 
-    # except openai.APIConnectionError as e:
-    #     log_error(f"Ошибка соединения с API OpenAI: {e}", e)
-    #     return f"Ошибка соединения с OpenAI: {e}"
-    # except openai.RateLimitError as e:
-    #     log_error(f"Превышен лимит запросов к API OpenAI: {e}", e)
-    #     return f"Превышен лимит запросов к OpenAI: {e}"
-    # except openai.AuthenticationError as e:
-    #     log_error(f"Ошибка аутентификации с API OpenAI (проверьте API-ключ): {e}", e)
-    #     error_details = str(e)
-    #     if hasattr(e, 'response') and e.response and hasattr(e.response, 'json'): # Проверяем, есть ли json метод
-    #         try:
-    #             error_json = e.response.json()
-    #             if 'error' in error_json and 'message' in error_json['error']:
-    #                 error_details = error_json['error']['message']
-    #         except Exception: # Не удалось распарсить json или другая ошибка
-    #             pass # Используем error_details, который уже str(e)
-    #     return f"Ошибка аутентификации с OpenAI: {error_details}"
-    # except openai.APIStatusError as e: # Обработка других ошибок API (например, 4xx, 5xx, кроме 401, 429)
-    #     log_error(f"Ошибка API OpenAI: статус {e.status_code}, ответ: {e.response}", e)
-    #     error_message = f"Ошибка API OpenAI (статус {e.status_code})"
-    #     if hasattr(e, 'response') and e.response:
-    #         try:
-    #             # Попытка получить JSON из ответа, если возможно
-    #             if hasattr(e.response, 'json'): 
-    #                 error_json = e.response.json()
-    #                 if 'error' in error_json and 'message' in error_json['error']:
-    #                     error_message += f": {error_json['error']['message']}"
-    #                 else:
-    #                     # Если нет стандартной структуры, пытаемся получить текст ответа
-    #                     error_message += f": {e.response.text}"
-    #             else:
-    #                  error_message += f": {e.response.text}" # Если response не имеет метода json()
-    #         except Exception:
-    #              error_message += f": {e.response.text if hasattr(e.response, 'text') else 'Нет текста ошибки'}" # Если не json или другая ошибка при парсинге
-    #     return error_message
-    # except openai.APITimeoutError as e: # Явный таймаут от библиотеки openai
-    #     log_error(f"Таймаут запроса к API OpenAI (openai library): {e}", e)
-    #     return f"Таймаут при обращении к OpenAI (openai library): {e}"
-    # except Exception as e: # Общая непредвиденная ошибка
-    #     log_error(f"Непредвиденная ошибка при вызове API ChatGPT через библиотеку openai: {type(e).__name__} - {e}", e)
-    #     return f"Непредвиденная ошибка (openai library): {type(e).__name__} - {str(e)}"
-    # Временно просто возвращаем распознанные слова без агрегации
-    words = []
-    for line in prompt_text.split('\n'):
-        if line.startswith('Шаг'):
-            # Извлекаем первое слово из каждого шага
+    except openai.APIConnectionError as e:
+        log_error(f"Ошибка соединения с API OpenAI: {e}", e)
+        return f"Ошибка соединения с OpenAI: {e}"
+    except openai.RateLimitError as e:
+        log_error(f"Превышен лимит запросов к API OpenAI: {e}", e)
+        return f"Превышен лимит запросов к OpenAI: {e}"
+    except openai.AuthenticationError as e:
+        log_error(f"Ошибка аутентификации с API OpenAI (проверьте API-ключ): {e}", e)
+        error_details = str(e)
+        if hasattr(e, 'response') and e.response and hasattr(e.response, 'json'): # Проверяем, есть ли json метод
             try:
-                step_data = line.split(': ')[1]
-                first_word = step_data.split(',')[0].strip('[]()\'')
-                words.append(first_word)
-            except:
-                continue
-    return ' '.join(words)
+                error_json = e.response.json()
+                if 'error' in error_json and 'message' in error_json['error']:
+                    error_details = error_json['error']['message']
+            except Exception: # Не удалось распарсить json или другая ошибка
+                pass # Используем error_details, который уже str(e)
+        return f"Ошибка аутентификации с OpenAI: {error_details}"
+    except openai.APIStatusError as e: # Обработка других ошибок API (например, 4xx, 5xx, кроме 401, 429)
+        log_error(f"Ошибка API OpenAI: статус {e.status_code}, ответ: {e.response}", e)
+        error_message = f"Ошибка API OpenAI (статус {e.status_code})"
+        if hasattr(e, 'response') and e.response:
+            try:
+                # Попытка получить JSON из ответа, если возможно
+                if hasattr(e.response, 'json'): 
+                    error_json = e.response.json()
+                    if 'error' in error_json and 'message' in error_json['error']:
+                        error_message += f": {error_json['error']['message']}"
+                    else:
+                        # Если нет стандартной структуры, пытаемся получить текст ответа
+                        error_message += f": {e.response.text}"
+                else:
+                     error_message += f": {e.response.text}" # Если response не имеет метода json()
+            except Exception:
+                 error_message += f": {e.response.text if hasattr(e.response, 'text') else 'Нет текста ошибки'}" # Если не json или другая ошибка при парсинге
+        return error_message
+    except openai.APITimeoutError as e: # Явный таймаут от библиотеки openai
+        log_error(f"Таймаут запроса к API OpenAI (openai library): {e}", e)
+        return f"Таймаут при обращении к OpenAI (openai library): {e}"
+    except Exception as e: # Общая непредвиденная ошибка
+        log_error(f"Непредвиденная ошибка при вызове API ChatGPT через библиотеку openai: {type(e).__name__} - {e}", e)
+        return f"Непредвиденная ошибка (openai library): {type(e).__name__} - {str(e)}"
 
 class RSLRecognitionApp(QMainWindow):
     def __init__(self):
@@ -638,54 +626,12 @@ class RSLRecognitionApp(QMainWindow):
             log_warning("Не удалось получить кадр с камеры")
             return
         
-        # Добавляем на кадр распознанный жест
-        frame_with_text = frame.copy()
-        
-        # Используем self.last_recognized_gloss_for_overlay и self.last_recognized_confidence_for_overlay
-        # для наложения текста на видеокадр, а не старые prediction_list/confidence_list
-        current_gloss_to_display = self.last_recognized_gloss_for_overlay
-        current_confidence_to_display = self.last_recognized_confidence_for_overlay
-
-        if current_gloss_to_display != self.NO_GESTURE_SIGNAL: # Проверяем, что есть что отображать
-            text = current_gloss_to_display
-            confidence = current_confidence_to_display
-            display_text = f"{text} ({confidence:.2f})"
-            
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 1
-            font_thickness = 2
-            text_color = (0, 255, 0)  # Зеленый цвет
-            
-            # Меняем цвет в зависимости от уверенности
-            if confidence < 0.3:
-                text_color = (0, 0, 255)  # Красный для низкой уверенности
-            elif confidence < 0.6:
-                text_color = (0, 255, 255)  # Желтый для средней уверенности
-            
-            text_position = (20, 50)  # Позиция в левом верхнем углу
-            
-            # Добавляем фон для текста для лучшей читаемости
-            text_size, _ = cv2.getTextSize(display_text, font, font_scale, font_thickness)
-            cv2.rectangle(
-                frame_with_text, 
-                (text_position[0] - 10, text_position[1] - text_size[1] - 10),
-                (text_position[0] + text_size[0] + 10, text_position[1] + 10),
-                (0, 0, 0),  # Черный фон
-                -1  # Заполненный прямоугольник
-            )
-            
-            # Добавляем текст
-            cv2.putText(
-                frame_with_text, display_text, text_position, font, font_scale, 
-                text_color, font_thickness, cv2.LINE_AA
-            )
-        
         # Если идет запись, сохраняем кадр
         if self.is_recording and self.video_writer:
-            self.video_writer.write(frame_with_text)
+            self.video_writer.write(frame)
         
         # Подготовка кадра для отображения
-        frame_for_display = cv2.cvtColor(frame_with_text, cv2.COLOR_BGR2RGB)
+        frame_for_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = frame_for_display.shape
         bytes_per_line = ch * w
         qt_image = QImage(frame_for_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
@@ -719,7 +665,6 @@ class RSLRecognitionApp(QMainWindow):
                         log_warning("Recognizer.predict() не вернул предсказаний.")
                         self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
                         self.last_recognized_confidence_for_overlay = 0.0
-                        # Можно добавить обработку такой ситуации, если необходимо
                     else:
                         # Берем топ-1 предсказание для оверлея на видео и первичной логики
                         gloss, confidence = top_n_predictions[0]
@@ -830,54 +775,12 @@ class RSLRecognitionApp(QMainWindow):
             log_warning("Не удалось получить кадр с камеры")
             return
         
-        # Добавляем на кадр распознанный жест
-        frame_with_text = frame.copy()
-        
-        # Используем self.last_recognized_gloss_for_overlay и self.last_recognized_confidence_for_overlay
-        # для наложения текста на видеокадр, а не старые prediction_list/confidence_list
-        current_gloss_to_display = self.last_recognized_gloss_for_overlay
-        current_confidence_to_display = self.last_recognized_confidence_for_overlay
-
-        if current_gloss_to_display != self.NO_GESTURE_SIGNAL: # Проверяем, что есть что отображать
-            text = current_gloss_to_display
-            confidence = current_confidence_to_display
-            display_text = f"{text} ({confidence:.2f})"
-            
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 1
-            font_thickness = 2
-            text_color = (0, 255, 0)  # Зеленый цвет
-            
-            # Меняем цвет в зависимости от уверенности
-            if confidence < 0.3:
-                text_color = (0, 0, 255)  # Красный для низкой уверенности
-            elif confidence < 0.6:
-                text_color = (0, 255, 255)  # Желтый для средней уверенности
-            
-            text_position = (20, 50)  # Позиция в левом верхнем углу
-            
-            # Добавляем фон для текста для лучшей читаемости
-            text_size, _ = cv2.getTextSize(display_text, font, font_scale, font_thickness)
-            cv2.rectangle(
-                frame_with_text, 
-                (text_position[0] - 10, text_position[1] - text_size[1] - 10),
-                (text_position[0] + text_size[0] + 10, text_position[1] + 10),
-                (0, 0, 0),  # Черный фон
-                -1  # Заполненный прямоугольник
-            )
-            
-            # Добавляем текст
-            cv2.putText(
-                frame_with_text, display_text, text_position, font, font_scale, 
-                text_color, font_thickness, cv2.LINE_AA
-            )
-        
         # Если идет запись, сохраняем кадр
         if self.is_recording and self.video_writer:
-            self.video_writer.write(frame_with_text)
+            self.video_writer.write(frame)
         
         # Подготовка кадра для отображения
-        frame_for_display = cv2.cvtColor(frame_with_text, cv2.COLOR_BGR2RGB)
+        frame_for_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = frame_for_display.shape
         bytes_per_line = ch * w
         qt_image = QImage(frame_for_display.data, w, h, bytes_per_line, QImage.Format_RGB888)

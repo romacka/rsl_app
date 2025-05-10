@@ -7,10 +7,8 @@ import datetime
 from pathlib import Path
 from recognizer import RSLRecognizer
 from dotenv import load_dotenv
-import openai # <--- Раскомментируем openai
-# import requests # <--- Комментируем requests
-# import json # <--- Комментируем json
-import httpx # <--- Добавляем импорт httpx
+import openai
+import httpx
 # Настройка для правильного отображения русских символов в консоли
 if os.name == 'nt':  # Для Windows
     os.system('chcp 65001')
@@ -20,10 +18,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
-# from recognizer import RSLRecognizer # This line seems to be original, keeping it.
 import PyQt5
-# REMOVE: from model import get_model
-# REMOVE: from recognition import GestureRecognition
 from recognizer import RSLRecognizer 
 
 # Загрузка переменных окружения из .env файла
@@ -65,62 +60,25 @@ def get_chatgpt_response(prompt_text):
     if not api_key:
         log_error("API-ключ OpenAI не найден в переменных окружения.")
         return "Ошибка: API-ключ OpenAI не настроен."
-
-    # openai.api_key = api_key # Устанавливаем ключ для библиотеки openai
-    # org_id = os.getenv("OPENAI_ORG_ID") # Если используется ключ проекта, может потребоваться ID организации
-    # if org_id:
-    #    openai.organization = org_id
-
-    # Используем стандартную модель и эндпоинт Chat Completions
-    # Если вы хотите использовать gpt-4.1-nano и другой эндпоинт, их нужно будет указать здесь
-    model_to_use = "gpt-4.1-mini" # Оставляем модель, которую вы использовали
-    # api_url = "https://api.openai.com/v1/chat/completions" # Не используется с библиотекой openai
-
-    # --- Убираем ВРЕМЕННЫЙ ТЕСТ --- 
-    # simple_test_payload = {
-    # "model": model_to_use,
-    # "messages": [{"role": "user", "content": "Say this is a test!"}],
-    # "temperature": 0.7 
-    # }
-    # payload_to_send = simple_test_payload
-    # -------------------------------------------------------------
-
+    model_to_use = "gpt-4.1-mini"
     messages = [
         {"role": "system", "content": "Ты — полезный ассистент, который помогает составить осмысленное русское предложение из данных распознавания жестов."},
         {"role": "user", "content": prompt_text}
     ]
     
     log_info(f"Подготовка запроса в ChatGPT с использованием библиотеки 'openai' (модель: {model_to_use})...")
-    # log_debug(f"Тело запроса (messages) для ChatGPT:\n------ MESSAGES НАЧАЛО ------\n{json.dumps(messages, indent=2, ensure_ascii=False)}\n------ MESSAGES КОНЕЦ ------") # json.dumps здесь не нужен, так как json не импортируется
 
     try:
         log_info(f"Отправка запроса в ChatGPT (модель: {model_to_use})...")
-        
-        # --- ДИАГНОСТИКА SSL: Начало ---
-        # Попробуем отключить SSL-верификацию для диагностики FileNotFoundError
-        # Это НЕ рекомендуется для постоянного использования!
-        # Если это поможет, значит проблема в SSL-сертификатах вашего окружения.
         custom_httpx_client = httpx.Client(verify=False)
         client = openai.OpenAI(api_key=api_key, http_client=custom_httpx_client)
-        # --- ДИАГНОСТИКА SSL: Конец ---
-        
-        # Старая инициализация клиента (закомментирована для теста):
-        # client = openai.OpenAI(api_key=api_key) 
-
-        # org_id = os.getenv("OPENAI_ORG_ID")
-        # if org_id:
-        # client.organization = org_id # Эта строка была закомментирована и так и останется
-
         response = client.chat.completions.create(
             model=model_to_use,
             messages=messages,
             temperature=0.5,
             max_tokens=150,
-            timeout=60.0 # Таймаут в секундах
+            timeout=60.0 
         )
-        
-        # log_info(f"Ответ от сервера OpenAI получен.") 
-        # log_debug(f"Объект ответа (сырой):\n------ ОБЪЕКТ ОТВЕТА НАЧАЛО ------\n{response}\n------ ОБЪЕКТ ОТВЕТА КОНЕЦ ------")
 
         if response.choices and len(response.choices) > 0:
             message = response.choices[0].message
@@ -189,7 +147,7 @@ class RSLRecognitionApp(QMainWindow):
         self.capture = None
         self.recognizer = None
         self.frame_counter = 0
-        self.tensors_list = [] # Добавил обратно, т.к. используется в update_frame для сбора кадров для модели
+        self.tensors_list = []
         
         # Новые переменные для сбора предложений
         self.NO_GESTURE_SIGNAL = "---"
@@ -225,7 +183,6 @@ class RSLRecognitionApp(QMainWindow):
         
         # Статусная строка
         self.statusBar().showMessage("Готов к работе. Ожидание ввода предложения.")
-        # self.text_display.setText("Жду ввода предложения...") # Будет установлено в _init_ui или _reset_state
         
     def _init_ui(self):
         # Создание центрального виджета
@@ -607,8 +564,6 @@ class RSLRecognitionApp(QMainWindow):
         chatgpt_prompt = "\n".join(prompt_lines)
         
         log_info("Сгенерированный промпт для языковой модели:")
-        # Для краткости лога, можно не выводить весь промпт каждый раз или выводить его часть
-        # log_info(chatgpt_prompt) 
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [PROMPT] Сформирован промпт из {len(self.current_sentence_predictions)} шагов.")
 
         # Получаем ответ от ChatGPT
@@ -622,7 +577,7 @@ class RSLRecognitionApp(QMainWindow):
             'final_sentence': final_sentence
         }
         
-        self.text_display.setText(f"Результат: {final_sentence}") # Убрано упоминание промпта, т.к. теперь это реальный результат
+        self.text_display.setText(f"Результат: {final_sentence}")
         
         if final_sentence and not final_sentence.startswith("Ошибка при обращении к ChatGPT"):
             self.save_button.setEnabled(True)
@@ -822,10 +777,6 @@ class RSLRecognitionApp(QMainWindow):
         
         self.is_collecting_sentence = False
         self.current_sentence_predictions = []
-        # self.last_processed_data_for_saving остается для кнопки "Сохранить", если что-то было обработано
-        # Если нужно полностью очистить и то, что можно сохранить:
-        # self.last_processed_data_for_saving = None 
-        # self.save_button.setEnabled(False)
 
         self.tensors_list = [] # Очищаем буфер тензоров, если он используется
         self.frame_counter = 0
@@ -948,7 +899,6 @@ class RSLRecognitionApp(QMainWindow):
                         log_warning("Recognizer.predict() не вернул предсказаний.")
                         self.last_recognized_gloss_for_overlay = self.NO_GESTURE_SIGNAL
                         self.last_recognized_confidence_for_overlay = 0.0
-                        # Можно добавить обработку такой ситуации, если необходимо
                     else:
                         # Берем топ-1 предсказание для оверлея на видео и первичной логики
                         gloss, confidence = top_n_predictions[0]

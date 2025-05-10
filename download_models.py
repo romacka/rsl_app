@@ -57,7 +57,7 @@ MODEL_URLS = {
     "SignFlow-R.onnx": "https://rndml-team-cv.obs.ru-moscow-1.hc.sbercloud.ru/datasets/slovo/models/SignFlow-R.onnx",
 }
 
-# Размеры файлов в байтах (приблизительно)
+# Примерные размеры файлов в байтах
 MODEL_SIZES = {
     "mvit16-4.onnx": 140_000_000,  # ~140 MB
     "mvit32-2.onnx": 140_000_000,  # ~140 MB
@@ -78,7 +78,6 @@ class DownloadProgressBar:
         self.last_count = None
         self.last_percent = -1  # Последний отображенный процент
         self.dots = 0
-        # Важно: не запрашиваем размер терминала, если вывод перенаправлен
         self.bar_length = 30
     
     def __call__(self, count, block_size, total_size):
@@ -155,7 +154,7 @@ def download_model(model_name, output_dir, max_retries=3):
         
         # Проверяем размер файла
         if expected_size > 0:
-            # Если файл существует и размер соответствует ожидаемому (в пределах 1 МБ)
+            # Если файл существует и размер соответствует ожидаемому
             if abs(file_size - expected_size) < 1024*1024:
                 print(f"Модель {model_name} уже загружена ({file_size/(1024*1024):.1f} МБ) - пропускаем")
                 return True
